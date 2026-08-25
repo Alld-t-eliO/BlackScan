@@ -1,55 +1,51 @@
 # BlackScan - Complete Network & Web Vulnerability Scanner
 
-## Description
+##  Overview
 
-**BlackScan** est un scanner de sécurité complet qui combine **l'analyse réseau**, **le crawling web**, **l'OSINT**, et la **détection de vulnérabilités** en un seul outil. Il est conçu pour les audits de sécurité professionnels et les tests d'intrusion éthiques.
+**BlackScan** is a comprehensive security scanner that combines **network analysis**, **web crawling**, **OSINT** (Open Source Intelligence), and **vulnerability detection** into a single powerful tool. Designed for professional security audits and ethical penetration testing.
 
-### Fonctionnalités principales
+### Key Features
 
-- **Scan réseau avancé**
-  - Découverte d'hôtes (ping sweep)
-  - Scan de ports (1-65535)
-  - Détection de services et bannières
-  - Identification OS via TTL
+- **Advanced Network Scanning**
+  - Host discovery (ping sweep)
+  - Port scanning (1-65535)
+  - Service and banner detection
+  - OS fingerprinting via TTL
 
-- **Crawling & Scraping Web**
-  - Exploration automatique des sites (jusqu'à 5 niveaux)
-  - Extraction de toutes les URLs, liens, scripts, CSS
-  - Détection de formulaires et paramètres
-  - Analyse des commentaires HTML
+- **🕷️ Web Crawling & Scraping**
+  - Automatic site exploration (up to 5 levels)
+  - URL extraction (links, scripts, CSS)
+  - Form and parameter detection
+  - HTML comment analysis
 
-- **OSINT (Open Source Intelligence)**
-  - Extraction d'emails
-  - Récupération de numéros de téléphone
-  - Identification du personnel
-  - WHOIS et DNS records
-  - Analyse des métadonnées
+- **🔍 OSINT (Open Source Intelligence)**
+  - Email extraction
+  - Phone number discovery
+  - Staff identification
+  - WHOIS and DNS records
+  - Metadata analysis
 
-- **Détection de vulnérabilités**
+- **Vulnerability Detection**
   - XSS (Cross-Site Scripting)
-  - SQL Injection (basique)
+  - SQL Injection (basic)
   - Directory Listing
-  - Panneaux d'administration
-  - Fichiers de backup exposés
-  - Headers de sécurité manquants
-  - Technologies et frameworks
+  - Admin panels
+  - Exposed backup files
+  - Missing security headers
+  - Technology and framework detection
 
-- **Rapports complets**
-  - Export JSON
-  - Résumé détaillé
-  - Statistiques en temps réel
+- **Comprehensive Reports**
+  - JSON export
+  - Detailed summary
+  - Real-time statistics
+  - Color-coded output
 
-##  Installation
+## Installation
 
-### Prérequis
+### Prerequisites
 
 ```bash
-# Python 3.8 ou supérieur
-python3 --version
-
-# Git
-git --version
-# Python 3.8 ou supérieur
+# Python 3.8 or higher
 python3 --version
 
 # Git
