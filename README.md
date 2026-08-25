@@ -6,26 +6,26 @@
 
 ### Fonctionnalités principales
 
-- ** Scan réseau avancé**
+- **Scan réseau avancé**
   - Découverte d'hôtes (ping sweep)
   - Scan de ports (1-65535)
   - Détection de services et bannières
   - Identification OS via TTL
 
--  Crawling & Scraping Web
+- **Crawling & Scraping Web**
   - Exploration automatique des sites (jusqu'à 5 niveaux)
   - Extraction de toutes les URLs, liens, scripts, CSS
   - Détection de formulaires et paramètres
   - Analyse des commentaires HTML
 
--  OSINT (Open Source Intelligence)
+- **OSINT (Open Source Intelligence)**
   - Extraction d'emails
   - Récupération de numéros de téléphone
   - Identification du personnel
   - WHOIS et DNS records
   - Analyse des métadonnées
 
--  Détection de vulnérabilités
+- **Détection de vulnérabilités**
   - XSS (Cross-Site Scripting)
   - SQL Injection (basique)
   - Directory Listing
@@ -34,7 +34,7 @@
   - Headers de sécurité manquants
   - Technologies et frameworks
 
--  Rapports complets**
+- **Rapports complets**
   - Export JSON
   - Résumé détaillé
   - Statistiques en temps réel
@@ -44,6 +44,11 @@
 ### Prérequis
 
 ```bash
+# Python 3.8 ou supérieur
+python3 --version
+
+# Git
+git --version
 # Python 3.8 ou supérieur
 python3 --version
 
