@@ -1,0 +1,50 @@
+BlackScan/
+├── .github/
+│   ├── ISSUE_TEMPLATE/
+│   │   ├── bug_report.md
+│   │   └── feature_request.md
+│   ├── pull_request_template.md
+│   └── workflows/
+│       └── ci.yml
+├── network_scanner/
+│   ├── __init__.py
+│   ├── __main__.py
+│   ├── settings.py
+│   ├── checks/
+│   │   ├── __init__.py
+│   │   ├── base.py
+│   │   └── builtin.py
+│   ├── modules/
+│   │   ├── __init__.py
+│   │   ├── external_tools.py
+│   │   ├── os_detection.py
+│   │   ├── ping_sweep.py
+│   │   ├── port_scanner.py
+│   │   ├── report_diff.py
+│   │   ├── risk.py
+│   │   ├── service_scan.py
+│   │   └── vulnerability.py
+│   └── utils/
+│       ├── logger.py
+│       └── utils.py
+├── tests/
+│   └── test_scanner.py
+├── .gitignore
+├── CONTRIBUTING.md
+├── LICENSE
+├── README.md
+├── SECURITY.md
+├── pyproject.toml
+├── requirements.txt
+├── scanner.py
+└── struct.txt
+
+Ignored/generated locally:
+├── .git/
+├── .ruff_cache/
+├── blackscan.egg-info/
+├── reports/
+├── venv/
+├── __pycache__/
+├── .DS_Store
+└── scan/report JSON, HTML, and CSV outputs

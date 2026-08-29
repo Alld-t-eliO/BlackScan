@@ -1,6 +1,7 @@
 import socket
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
+from typing import ClassVar
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
@@ -11,6 +12,7 @@ class FTPAnonymousLogin(Check):
     name = 'FTP Anonymous Login'
     ports = (21,)
     severity = 'medium'
+    intrusive = True
     recommendation = 'Disable anonymous FTP or restrict it to a dedicated read-only directory.'
 
     def run(self, host, port, service):
@@ -58,6 +60,7 @@ class MySQLEmptyRootPassword(Check):
     name = 'MySQL Empty Root Password'
     ports = (3306,)
     severity = 'high'
+    intrusive = True
     recommendation = 'Set a strong root password and restrict network access to MySQL.'
 
     def run(self, host, port, service):
@@ -84,6 +87,7 @@ class UnauthenticatedRedis(Check):
     name = 'Unauthenticated Redis'
     ports = (6379,)
     severity = 'high'
+    intrusive = True
     recommendation = 'Require Redis authentication and bind Redis to trusted interfaces only.'
 
     def run(self, host, port, service):
@@ -179,6 +183,27 @@ class TLSCertificateExpiry(Check):
         return None
 
 
+class SensitiveWebPathExposure(Check):
+    name = 'Sensitive Web Path Exposed'
+    ports = (80, 443, 8000, 8080, 8443)
+    severity = 'high'
+    recommendation = 'Remove sensitive files from the web root and restrict access to backup or metadata paths.'
+    sensitive_paths: ClassVar[dict[str, str]] = {
+        '/.git/': 'Git metadata path responded',
+        '/.env': 'Environment file path responded',
+        '/backup.zip': 'Backup archive path responded',
+        '/backup.tar.gz': 'Backup archive path responded',
+        '/config.php.bak': 'Backup configuration path responded',
+    }
+
+    def run(self, host, port, service):
+        for item in service.get('http', {}).get('sensitive_paths', []):
+            if item.get('interesting') and item.get('path') in self.sensitive_paths:
+                evidence = f"{item['path']} HTTP {item['status']} - {self.sensitive_paths[item['path']]}"
+                return self.finding(host, port, evidence)
+        return None
+
+
 BUILTIN_CHECKS = (
     FTPAnonymousLogin,
     DirectoryListing,
@@ -187,4 +212,5 @@ BUILTIN_CHECKS = (
     MissingHTTPSecurityHeaders,
     HTTPWithoutTLS,
     TLSCertificateExpiry,
+    SensitiveWebPathExposure,
 )

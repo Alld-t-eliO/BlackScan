@@ -23,9 +23,12 @@ class Check:
     name = 'Unnamed Check'
     ports = ()
     severity = 'info'
+    intrusive = False
     recommendation = 'Verify manually and harden the exposed service.'
 
-    def applies_to(self, port, service):
+    def applies_to(self, port, service, allow_intrusive=False):
+        if self.intrusive and not allow_intrusive:
+            return False
         return port in self.ports
 
     def run(self, host, port, service):

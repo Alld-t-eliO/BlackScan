@@ -1,4 +1,5 @@
 import hashlib
+import ipaddress
 import socket
 import ssl
 from html.parser import HTMLParser
@@ -28,6 +29,7 @@ COMMON_PORTS = {
 HTTP_PORTS = {80, 8080, 8000, 8888}
 HTTPS_PORTS = {443, 8443}
 COMMON_WEB_PATHS = ('/admin', '/login', '/api', '/swagger', '/docs')
+SENSITIVE_WEB_PATHS = ('/.git/', '/.env', '/backup.zip', '/backup.tar.gz', '/config.php.bak')
 SECURITY_HEADERS = (
     'strict-transport-security',
     'content-security-policy',
@@ -133,6 +135,7 @@ def detect_http(ip, port, timeout=2):
                 'favicon_hash': fetch_favicon_hash(url, timeout),
                 'technologies': detect_technologies(headers, body),
                 'common_paths': probe_common_paths(url, timeout),
+                'sensitive_paths': probe_paths(url, SENSITIVE_WEB_PATHS, timeout),
             }
     except (OSError, URLError, ValueError, ssl.SSLError):
         return {}
@@ -230,9 +233,13 @@ def detect_technologies(headers, body):
 
 
 def probe_common_paths(base_url, timeout=2):
+    return probe_paths(base_url, COMMON_WEB_PATHS, timeout)
+
+
+def probe_paths(base_url, paths, timeout=2):
     results = []
     opener = build_opener(NoRedirectHandler)
-    for path in COMMON_WEB_PATHS:
+    for path in paths:
         url = urljoin(base_url, path)
         try:
             request = Request(url, headers={'User-Agent': 'BlackScan/1.0'})
@@ -253,21 +260,57 @@ def probe_common_paths(base_url, timeout=2):
 
 
 def detect_tls(ip, port, timeout=2):
-    context = ssl.create_default_context()
-    context.check_hostname = False
+    """Collect TLS metadata and certificate fingerprint without disabling trust checks for validation."""
+    tls_info = {
+        'sha256_fingerprint': '',
+        'not_before': '',
+        'not_after': '',
+        'verification': {
+            'verified': False,
+            'hostname_checked': False,
+            'error': '',
+        },
+    }
+
     try:
-        with socket.create_connection((ip, port), timeout=timeout) as sock, context.wrap_socket(
+        pem_cert = ssl.get_server_certificate((ip, port), timeout=timeout)
+        der_cert = ssl.PEM_cert_to_DER_cert(pem_cert)
+        tls_info['sha256_fingerprint'] = hashlib.sha256(der_cert).hexdigest()
+    except (OSError, ssl.SSLError, ValueError):
+        return tls_info
+
+    try:
+        ipaddress.ip_address(ip)
+        tls_info['verification']['error'] = 'hostname verification skipped for IP target; use certificate fingerprint'
+    except ValueError:
+        verification = verify_tls_hostname(ip, port, timeout)
+        tls_info['verification'] = verification
+        tls_info['not_before'] = verification.get('not_before', '')
+        tls_info['not_after'] = verification.get('not_after', '')
+
+    return tls_info
+
+
+def verify_tls_hostname(hostname, port, timeout=2):
+    context = ssl.create_default_context()
+    try:
+        with socket.create_connection((hostname, port), timeout=timeout) as sock, context.wrap_socket(
             sock,
-            server_hostname=ip,
+            server_hostname=hostname,
         ) as tls_sock:
             cert = tls_sock.getpeercert()
             return {
-                'subject': cert.get('subject', ()),
-                'issuer': cert.get('issuer', ()),
+                'verified': True,
+                'hostname_checked': True,
+                'error': '',
                 'not_before': cert.get('notBefore', ''),
                 'not_after': cert.get('notAfter', ''),
                 'version': tls_sock.version(),
                 'cipher': tls_sock.cipher(),
             }
-    except (OSError, ssl.SSLError, ValueError):
-        return {}
+    except (OSError, ssl.SSLError, ValueError) as exc:
+        return {
+            'verified': False,
+            'hostname_checked': True,
+            'error': str(exc)[:200],
+        }

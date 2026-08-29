@@ -1,5 +1,6 @@
 import asyncio
 import socket
+import threading
 
 
 async def scan_port_async(ip, port, timeout=2):
@@ -47,6 +48,23 @@ def scan_ports(ip, ports, threads=100, timeout=2):
     if not ports:
         return []
     try:
-        return asyncio.run(scan_ports_async(ip, ports, threads, timeout))
+        asyncio.get_running_loop()
     except RuntimeError:
-        return [port for port in ports if scan_port(ip, port, timeout)]
+        return asyncio.run(scan_ports_async(ip, ports, threads, timeout))
+
+    result = []
+    error = None
+
+    def runner():
+        nonlocal result, error
+        try:
+            result = asyncio.run(scan_ports_async(ip, ports, threads, timeout))
+        except RuntimeError as exc:
+            error = exc
+
+    thread = threading.Thread(target=runner)
+    thread.start()
+    thread.join()
+    if error:
+        raise error
+    return result

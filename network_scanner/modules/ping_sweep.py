@@ -43,7 +43,7 @@ def sweep(target, threads=100, timeout=2, max_hosts=4096, tcp_ports=TCP_DISCOVER
     if network.num_addresses == 1:
         address = str(network.network_address)
         if is_host_active(address, timeout, tcp_ports):
-            print(f"[+] {address} est actif")
+            print(f"[+] {address} is active")
         return [address]
     else:
         addresses = [str(ip) for ip in network.hosts()]
@@ -62,6 +62,6 @@ def sweep(target, threads=100, timeout=2, max_hosts=4096, tcp_ports=TCP_DISCOVER
                 active = False
             if active:
                 results.append(ip)
-                print(f"[+] {ip} est actif")
+                print(f"[+] {ip} is active")
 
     return results
