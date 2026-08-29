@@ -1,6 +1,32 @@
+import asyncio
 import socket
-import threading
-import queue
+
+
+async def scan_port_async(ip, port, timeout=2):
+    try:
+        future = asyncio.open_connection(ip, port)
+        _reader, writer = await asyncio.wait_for(future, timeout=timeout)
+        writer.close()
+        try:
+            await writer.wait_closed()
+        except OSError:
+            pass
+        return True
+    except (asyncio.TimeoutError, OSError):
+        return False
+
+
+async def scan_ports_async(ip, ports, concurrency=100, timeout=2):
+    semaphore = asyncio.Semaphore(max(1, concurrency))
+    open_ports = []
+
+    async def bounded_scan(port):
+        async with semaphore:
+            if await scan_port_async(ip, port, timeout):
+                open_ports.append(port)
+
+    await asyncio.gather(*(bounded_scan(port) for port in ports))
+    return sorted(open_ports)
 
 
 def scan_port(ip, port, timeout=2):
@@ -18,35 +44,9 @@ def scan_port(ip, port, timeout=2):
 
 
 def scan_ports(ip, ports, threads=100, timeout=2):
-    open_ports = []
-    port_queue = queue.Queue()
-    
-    for port in ports:
-        port_queue.put(port)
-    if port_queue.empty():
+    if not ports:
         return []
-    
-    lock = threading.Lock()
-    
-    def worker():
-        while True:
-            try:
-                port = port_queue.get_nowait()
-            except queue.Empty:
-                break
-            if scan_port(ip, port, timeout):
-                with lock:
-                    open_ports.append(port)
-            port_queue.task_done()
-    
-    thread_list = []
-    for _ in range(min(max(1, threads), port_queue.qsize())):
-        t = threading.Thread(target=worker)
-        t.start()
-        thread_list.append(t)
-    
-    port_queue.join()
-    for t in thread_list:
-        t.join()
-    
-    return sorted(open_ports)
+    try:
+        return asyncio.run(scan_ports_async(ip, ports, threads, timeout))
+    except RuntimeError:
+        return [port for port in ports if scan_port(ip, port, timeout)]

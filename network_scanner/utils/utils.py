@@ -1,6 +1,3 @@
-#!/usr/bin/env python3
-
-
 class Colors:
     RED = '\033[91m'
     GREEN = '\033[92m'

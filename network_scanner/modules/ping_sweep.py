@@ -1,59 +1,67 @@
-import subprocess
 import ipaddress
-import threading
-import queue
+import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+from network_scanner.modules.port_scanner import scan_port
+
+TCP_DISCOVERY_PORTS = (80, 443, 22, 445, 3389)
+
 
 def ping_host(ip, timeout=2):
     try:
-        timeout_arg = '-t' if sys.platform == 'darwin' else '-W'
+        wait_value = str(int(timeout * 1000)) if sys.platform == 'darwin' else str(timeout)
         result = subprocess.run(
-            ['ping', '-c', '1', timeout_arg, str(timeout), ip],
+            ['ping', '-c', '1', '-W', wait_value, ip],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
-            timeout=timeout
+            timeout=timeout,
+            check=False,
         )
         return result.returncode == 0
     except (OSError, subprocess.SubprocessError):
         return False
 
-def sweep(target, threads=100, timeout=2):
+
+def is_host_active(ip, timeout=2, tcp_ports=TCP_DISCOVERY_PORTS):
+    if ping_host(ip, timeout):
+        return True
+    return any(scan_port(ip, port, timeout) for port in tcp_ports)
+
+
+def sweep(target, threads=100, timeout=2, max_hosts=4096, tcp_ports=TCP_DISCOVERY_PORTS):
     try:
         network = ipaddress.ip_network(target, strict=False)
     except ValueError:
-        if ping_host(target, timeout):
+        if is_host_active(target, timeout, tcp_ports):
             return [target]
         return []
-    
-    ip_queue = queue.Queue()
-    for ip in network.hosts():
-        ip_queue.put(str(ip))
-    if ip_queue.empty():
+
+    if network.num_addresses > max_hosts + 2:
+        raise ValueError(f"target range is too large ({network.num_addresses} addresses); use --max-hosts to allow it")
+
+    if network.num_addresses == 1:
+        address = str(network.network_address)
+        if is_host_active(address, timeout, tcp_ports):
+            print(f"[+] {address} est actif")
+        return [address]
+    else:
+        addresses = [str(ip) for ip in network.hosts()]
+    if not addresses:
         return []
-    
+
     results = []
-    lock = threading.Lock()
-    
-    def worker():
-        while True:
+    workers = min(max(1, threads), len(addresses))
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        futures = {executor.submit(is_host_active, ip, timeout, tcp_ports): ip for ip in addresses}
+        for future in as_completed(futures):
+            ip = futures[future]
             try:
-                ip = ip_queue.get_nowait()
-            except queue.Empty:
-                break
-            if ping_host(ip, timeout):
-                with lock:
-                    results.append(ip)
-                    print(f"[+] {ip} est actif")
-            ip_queue.task_done()
-    
-    thread_list = []
-    for _ in range(min(max(1, threads), ip_queue.qsize())):
-        t = threading.Thread(target=worker)
-        t.start()
-        thread_list.append(t)
-    
-    ip_queue.join()
-    for t in thread_list:
-        t.join()
-    
+                active = future.result()
+            except OSError:
+                active = False
+            if active:
+                results.append(ip)
+                print(f"[+] {ip} est actif")
+
     return results
