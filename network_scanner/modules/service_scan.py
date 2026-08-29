@@ -1,7 +1,9 @@
 import hashlib
 import ipaddress
+import os
 import socket
 import ssl
+import tempfile
 from html.parser import HTMLParser
 from urllib.error import URLError
 from urllib.parse import urljoin
@@ -260,14 +262,16 @@ def probe_paths(base_url, paths, timeout=2):
 
 
 def detect_tls(ip, port, timeout=2):
-    """Collect TLS metadata and certificate fingerprint without disabling trust checks for validation."""
+    """Collect TLS metadata and verify trust plus identity, including IP SANs."""
     tls_info = {
         'sha256_fingerprint': '',
         'not_before': '',
         'not_after': '',
         'verification': {
             'verified': False,
-            'hostname_checked': False,
+            'identity_checked': False,
+            'trust_chain_checked': False,
+            'target_type': target_type(ip),
             'error': '',
         },
     }
@@ -279,19 +283,19 @@ def detect_tls(ip, port, timeout=2):
     except (OSError, ssl.SSLError, ValueError):
         return tls_info
 
-    try:
-        ipaddress.ip_address(ip)
-        tls_info['verification']['error'] = 'hostname verification skipped for IP target; use certificate fingerprint'
-    except ValueError:
-        verification = verify_tls_hostname(ip, port, timeout)
-        tls_info['verification'] = verification
-        tls_info['not_before'] = verification.get('not_before', '')
-        tls_info['not_after'] = verification.get('not_after', '')
+    verification = verify_tls_identity(ip, port, timeout)
+    tls_info['verification'] = verification
+    tls_info['not_before'] = verification.pop('not_before', '')
+    tls_info['not_after'] = verification.pop('not_after', '')
+    if not tls_info['not_before'] or not tls_info['not_after']:
+        decoded = decode_pem_certificate(pem_cert)
+        tls_info['not_before'] = decoded.get('notBefore', '')
+        tls_info['not_after'] = decoded.get('notAfter', '')
 
     return tls_info
 
 
-def verify_tls_hostname(hostname, port, timeout=2):
+def verify_tls_identity(hostname, port, timeout=2):
     context = ssl.create_default_context()
     try:
         with socket.create_connection((hostname, port), timeout=timeout) as sock, context.wrap_socket(
@@ -301,7 +305,9 @@ def verify_tls_hostname(hostname, port, timeout=2):
             cert = tls_sock.getpeercert()
             return {
                 'verified': True,
-                'hostname_checked': True,
+                'identity_checked': True,
+                'trust_chain_checked': True,
+                'target_type': target_type(hostname),
                 'error': '',
                 'not_before': cert.get('notBefore', ''),
                 'not_after': cert.get('notAfter', ''),
@@ -311,6 +317,38 @@ def verify_tls_hostname(hostname, port, timeout=2):
     except (OSError, ssl.SSLError, ValueError) as exc:
         return {
             'verified': False,
-            'hostname_checked': True,
+            'identity_checked': True,
+            'trust_chain_checked': True,
+            'target_type': target_type(hostname),
             'error': str(exc)[:200],
         }
+
+
+def verify_tls_hostname(hostname, port, timeout=2):
+    """Backward-compatible alias for TLS identity verification."""
+    return verify_tls_identity(hostname, port, timeout)
+
+
+def decode_pem_certificate(pem_cert):
+    temp_name = ''
+    try:
+        with tempfile.NamedTemporaryFile('w', encoding='utf-8', delete=False) as handle:
+            temp_name = handle.name
+            handle.write(pem_cert)
+        return ssl._ssl._test_decode_cert(temp_name)
+    except (OSError, ssl.SSLError, ValueError):
+        return {}
+    finally:
+        if temp_name:
+            try:
+                os.unlink(temp_name)
+            except OSError:
+                pass
+
+
+def target_type(hostname):
+    try:
+        ipaddress.ip_address(hostname)
+    except ValueError:
+        return 'dns'
+    return 'ip'

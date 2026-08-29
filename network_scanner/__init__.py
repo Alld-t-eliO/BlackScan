@@ -1,2 +1,1 @@
 """BlackScan network scanner package."""
-

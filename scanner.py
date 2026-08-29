@@ -7,6 +7,7 @@ import html
 import json
 import os
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 
 from network_scanner import settings
@@ -70,6 +71,8 @@ class NetworkScanner:
         max_hosts=4096,
         compare_report=None,
         intrusive_checks=False,
+        host_workers=10,
+        service_workers=32,
     ):
         self.target = target
         self.threads = max(1, threads)
@@ -81,6 +84,8 @@ class NetworkScanner:
         self.max_hosts = max(1, max_hosts)
         self.compare_report = compare_report
         self.intrusive_checks = intrusive_checks
+        self.host_workers = max(1, host_workers)
+        self.service_workers = max(1, service_workers)
         self.results = {
             'hosts': [],
             'open_ports': {},
@@ -105,47 +110,87 @@ class NetworkScanner:
         print(f"{Colors.GREEN}[+] {len(hosts)} host(s) found{Colors.RESET}")
         print(f"\n{Colors.BLUE}[*] Step 2: scanning {len(self.ports)} port(s)...{Colors.RESET}")
 
+        scan_results = {}
+        workers = min(self.host_workers, len(self.results['hosts']))
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = {executor.submit(self.scan_host, host): host for host in self.results['hosts']}
+            for future in as_completed(futures):
+                host = futures[future]
+                try:
+                    host_result = future.result()
+                except (OSError, RuntimeError, ValueError) as exc:
+                    print(f"{Colors.RED}[!] Failed to scan {host}: {exc}{Colors.RESET}")
+                    continue
+                if host_result:
+                    scan_results[host] = host_result
+
         for host in self.results['hosts']:
-            print(f"\n{Colors.CYAN}[*] Scanning {host}{Colors.RESET}")
-            open_ports = port_scanner.scan_ports(host, self.ports, self.threads, self.timeout)
-
-            if not open_ports:
+            host_result = scan_results.get(host)
+            if not host_result:
                 continue
-
-            self.results['open_ports'][host] = open_ports
-            self.results['services'][host] = {}
-
-            for port in open_ports:
-                service = service_scan.detect_service(host, port, self.timeout)
-                self.results['services'][host][str(port)] = service
-
-                service_name = service.get('name', 'unknown')
-                banner = service.get('banner', '').replace('\n', ' ')[:80]
-                banner_display = f" ({banner})" if banner else ""
-                print(f"    {Colors.GREEN}[+] Port {port}/tcp: {service_name}{banner_display}{Colors.RESET}")
-
-                if self.aggressive and port in settings.WEB_PORTS.union({22}):
-                    os_info = os_detection.detect_os(host, self.timeout)
-                    if os_info:
-                        self.results['os'][host] = os_info
-                        print(f"    {Colors.PURPLE}[+] Probable OS: {os_info}{Colors.RESET}")
-
-                vulns = (
-                    vulnerability.check_vulnerabilities(host, port, service, self.intrusive_checks)
-                    if self.aggressive
-                    else []
-                )
-                if vulns:
-                    self.results['vulnerabilities'][f"{host}:{port}"] = vulns
-                    for vuln in vulns:
-                        print(f"    {Colors.RED}[!] {vuln['severity'].upper()}: {vuln['name']}{Colors.RESET}")
-
-                risk_info = risk.score_service(host, port, service, vulns)
-                self.results['risks'][f"{host}:{port}"] = risk_info
-                if risk_info['score'] in {'medium', 'high'}:
-                    print(f"    {Colors.YELLOW}[!] {risk_info['score']} risk: {host}:{port}{Colors.RESET}")
+            self.results['open_ports'][host] = host_result['open_ports']
+            self.results['services'][host] = host_result['services']
+            if host_result.get('os'):
+                self.results['os'][host] = host_result['os']
+            self.results['vulnerabilities'].update(host_result['vulnerabilities'])
+            self.results['risks'].update(host_result['risks'])
 
         return self.generate_report()
+
+    def scan_host(self, host):
+        print(f"\n{Colors.CYAN}[*] Scanning {host}{Colors.RESET}")
+        open_ports = port_scanner.scan_ports(host, self.ports, self.threads, self.timeout)
+
+        if not open_ports:
+            return None
+
+        host_result = {
+            'open_ports': open_ports,
+            'services': {},
+            'os': {},
+            'vulnerabilities': {},
+            'risks': {},
+        }
+
+        os_info = None
+        if self.aggressive and settings.WEB_PORTS.union({22}).intersection(open_ports):
+            os_info = os_detection.detect_os(host, self.timeout)
+            if os_info:
+                host_result['os'] = os_info
+                label = os_info.get('family', 'Unknown') if isinstance(os_info, dict) else os_info
+                print(f"    {Colors.PURPLE}[+] Probable OS: {label}{Colors.RESET}")
+
+        workers = min(self.service_workers, len(open_ports))
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = {executor.submit(self.scan_service, host, port): port for port in open_ports}
+            for future in as_completed(futures):
+                port = futures[future]
+                service, vulns, risk_info = future.result()
+                host_result['services'][str(port)] = service
+                if vulns:
+                    host_result['vulnerabilities'][f"{host}:{port}"] = vulns
+                host_result['risks'][f"{host}:{port}"] = risk_info
+
+        return host_result
+
+    def scan_service(self, host, port):
+        service = service_scan.detect_service(host, port, self.timeout)
+
+        service_name = service.get('name', 'unknown')
+        banner = service.get('banner', '').replace('\n', ' ')[:80]
+        banner_display = f" ({banner})" if banner else ""
+        print(f"    {Colors.GREEN}[+] Port {port}/tcp: {service_name}{banner_display}{Colors.RESET}")
+
+        vulns = vulnerability.check_vulnerabilities(host, port, service, self.intrusive_checks) if self.aggressive else []
+        if vulns:
+            for vuln in vulns:
+                print(f"    {Colors.RED}[!] {vuln['severity'].upper()}: {vuln['name']}{Colors.RESET}")
+
+        risk_info = risk.score_service(host, port, service, vulns)
+        if risk_info['score'] in {'medium', 'high'}:
+            print(f"    {Colors.YELLOW}[!] {risk_info['score']} risk: {host}:{port}{Colors.RESET}")
+
+        return service, vulns, risk_info
 
     def generate_report(self):
         print(f"\n{Colors.BLUE}[*] Generating reports...{Colors.RESET}")
@@ -169,6 +214,8 @@ class NetworkScanner:
                 'aggressive': self.aggressive,
                 'profile': self.profile,
                 'max_hosts': self.max_hosts,
+                'host_workers': self.host_workers,
+                'service_workers': self.service_workers,
                 'intrusive_checks': self.intrusive_checks,
                 'ports': self.ports,
                 'external_tools': external_tools.detect_external_tools(),
@@ -297,7 +344,7 @@ class NetworkScanner:
                 parts.append('</p>')
 
             if host in result['os']:
-                parts.append(f"<p><strong>Probable OS:</strong> {safe(result['os'][host])}</p>")
+                parts.append(f"<p><strong>Probable OS:</strong> {safe(self.format_os(result['os'][host]))}</p>")
 
             for key, vulns in result['vulnerabilities'].items():
                 if key.startswith(f'{host}:'):
@@ -406,6 +453,18 @@ class NetworkScanner:
         return counts
 
     @staticmethod
+    def format_os(os_info):
+        if isinstance(os_info, dict):
+            family = os_info.get('family', 'Unknown')
+            confidence = os_info.get('confidence', 'low')
+            ttl = os_info.get('observed_ttl')
+            initial = os_info.get('probable_initial_ttl')
+            if ttl is None:
+                return f'{family} ({confidence} confidence)'
+            return f'{family} ({confidence} confidence, TTL {ttl}, initial {initial})'
+        return str(os_info)
+
+    @staticmethod
     def comparison_markdown(comparison):
         lines = []
         sections = [
@@ -501,6 +560,8 @@ def build_parser():
     parser.add_argument('--ports', help='Ports to scan, for example: 22,80,443,8000-8100')
     parser.add_argument('-o', '--output-dir', default='reports', help='Report output directory')
     parser.add_argument('--max-hosts', type=int, default=4096, help='Maximum number of addresses allowed in a CIDR range')
+    parser.add_argument('--host-workers', type=int, default=10, help='Maximum hosts scanned in parallel')
+    parser.add_argument('--service-workers', type=int, default=32, help='Maximum services fingerprinted in parallel per host')
     parser.add_argument('--compare', help='Previous JSON report to compare with the new scan')
     parser.add_argument('--list-external-tools', action='store_true', help='List available external integrations')
     parser.add_argument('--intrusive-checks', action='store_true', help='Enable checks that attempt application-level interactions')
@@ -541,6 +602,8 @@ def main():
         args.max_hosts,
         args.compare,
         args.intrusive_checks,
+        args.host_workers,
+        args.service_workers,
     )
 
     try:
