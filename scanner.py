@@ -165,7 +165,13 @@ class NetworkScanner:
             futures = {executor.submit(self.scan_service, host, port): port for port in open_ports}
             for future in as_completed(futures):
                 port = futures[future]
-                service, vulns, risk_info = future.result()
+                try:
+                    service, vulns, risk_info = future.result()
+                except (OSError, RuntimeError, ValueError) as exc:
+                    print(f"    {Colors.RED}[!] Failed to fingerprint {host}:{port}: {exc}{Colors.RESET}")
+                    service = {'name': 'unknown', 'banner': '', 'http': {}, 'tls': {}}
+                    vulns = []
+                    risk_info = risk.score_service(host, port, service, vulns)
                 host_result['services'][str(port)] = service
                 if vulns:
                     host_result['vulnerabilities'][f"{host}:{port}"] = vulns

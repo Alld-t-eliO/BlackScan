@@ -5,7 +5,7 @@ import socket
 import ssl
 import tempfile
 from html.parser import HTMLParser
-from urllib.error import URLError
+from urllib.error import HTTPError, URLError
 from urllib.parse import urljoin
 from urllib.request import HTTPRedirectHandler, Request, build_opener, urlopen
 
@@ -118,15 +118,20 @@ def detect_http(ip, port, timeout=2):
     try:
         redirects = fetch_redirects(url, timeout)
         request = Request(url, headers={'User-Agent': 'BlackScan/1.0'})
-        with urlopen(request, timeout=timeout) as response:
+        response = None
+        try:
+            response = urlopen(request, timeout=timeout)
+        except HTTPError as exc:
+            response = exc
+        try:
             body = response.read(8192).decode('utf-8', errors='ignore')
             parser = TitleParser()
             parser.feed(body)
             headers = dict(response.headers.items())
-            cookies = parse_cookies(response.headers.get_all('Set-Cookie', []))
+            cookies = parse_cookies(get_header_values(response.headers, 'Set-Cookie'))
             return {
                 'url': url,
-                'status': response.status,
+                'status': getattr(response, 'status', None) or getattr(response, 'code', 0),
                 'redirects': redirects,
                 'server': headers.get('Server', ''),
                 'powered_by': headers.get('X-Powered-By', ''),
@@ -139,6 +144,9 @@ def detect_http(ip, port, timeout=2):
                 'common_paths': probe_common_paths(url, timeout),
                 'sensitive_paths': probe_paths(url, SENSITIVE_WEB_PATHS, timeout),
             }
+        finally:
+            if response:
+                response.close()
     except (OSError, URLError, ValueError, ssl.SSLError):
         return {}
 
@@ -189,6 +197,15 @@ def parse_cookies(cookies):
             'samesite': next((part.split('=', 1)[1] for part in flags if part.startswith('samesite=')), ''),
         })
     return parsed
+
+
+def get_header_values(headers, name):
+    if hasattr(headers, 'get_all'):
+        return headers.get_all(name, [])
+    value = headers.get(name, '') if headers else ''
+    if not value:
+        return []
+    return [value]
 
 
 def summarize_security_headers(headers):

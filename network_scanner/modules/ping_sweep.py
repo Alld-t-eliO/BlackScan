@@ -44,7 +44,8 @@ def sweep(target, threads=100, timeout=2, max_hosts=4096, tcp_ports=TCP_DISCOVER
         address = str(network.network_address)
         if is_host_active(address, timeout, tcp_ports):
             print(f"[+] {address} is active")
-        return [address]
+            return [address]
+        return []
     else:
         addresses = [str(ip) for ip in network.hosts()]
     if not addresses:
