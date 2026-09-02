@@ -19,10 +19,13 @@ It performs host discovery, TCP port scanning, lightweight service fingerprintin
 - Scan profiles: `quick`, `web`, `internal`, `full`, and `stealth`.
 - HTTP fingerprinting: status, title, redirects, selected headers, cookies, favicon hash, common paths, and sensitive path probes.
 - TLS metadata and certificate verification summary.
+- Optional proxy support for HTTP/HTTPS fingerprinting requests.
 - Lightweight vulnerability checks for common exposure patterns.
 - Risk scoring per service.
 - Reports in JSON, HTML, CSV, and Markdown.
+- Interactive TUI for configuring scans and reviewing generated JSON reports.
 - Optional comparison against a previous JSON report.
+- Vulnerability trend analysis across multiple JSON reports.
 - Detection of external tools such as `nmap`, `nuclei`, `httpx`, `subfinder`, and `dnsx`.
 
 ## Installation
@@ -56,43 +59,69 @@ python -m pip install -e ".[mysql]"
 Show the CLI help:
 
 ```bash
-python scanner.py --help
+python -m network_scanner --help
 ```
 
 Run a small authorized scan:
 
 ```bash
-python scanner.py -t 192.168.56.0/24 --authorized --profile quick
+python -m network_scanner -t 192.168.56.0/24 --authorized --profile quick
 ```
 
 Scan selected ports:
 
 ```bash
-python scanner.py -t 192.168.56.10 --authorized --ports 22,80,443,8000-8010
+python -m network_scanner -t 192.168.56.10 --authorized --ports 22,80,443,8000-8010
 ```
 
 Run web-focused checks:
 
 ```bash
-python scanner.py -t 192.168.56.10 --authorized --profile web
+python -m network_scanner -t 192.168.56.10 --authorized --profile web
+```
+
+Route HTTP/HTTPS fingerprinting through a proxy:
+
+```bash
+python -m network_scanner -t 192.168.56.10 --authorized --profile web --proxy http://127.0.0.1:8080
 ```
 
 Enable intrusive checks only inside an authorized lab:
 
 ```bash
-python scanner.py -t 192.168.56.10 --authorized --profile internal --intrusive-checks
+python -m network_scanner -t 192.168.56.10 --authorized --profile internal --intrusive-checks
 ```
 
 Compare with an older JSON report:
 
 ```bash
-python scanner.py -t 192.168.56.0/24 --authorized --compare reports/scan_report_previous.json
+python -m network_scanner -t 192.168.56.0/24 --authorized --compare reports/scan_report_previous.json
+```
+
+Analyze vulnerability evolution across existing reports:
+
+```bash
+python -m network_scanner --trend reports/scan_report_old.json reports/scan_report_new.json
 ```
 
 List optional external tools detected on the machine:
 
 ```bash
-python scanner.py --list-external-tools
+python -m network_scanner --list-external-tools
+```
+
+Open the interactive terminal UI:
+
+```bash
+python -m network_scanner --tui
+```
+
+From the TUI you can start a new scan, confirm authorized scope, set target/profile/ports/proxy/options, list external tools, or open reports.
+
+Open a specific JSON report directly in the report viewer:
+
+```bash
+python -m network_scanner --tui reports/scan_report_20260902_173005.json
 ```
 
 ## Reports
@@ -106,16 +135,22 @@ By default reports are written to `reports/`:
 
 Use `-o` or `--output-dir` to choose another output directory.
 
+Trend analysis writes:
+
+- `vulnerability_trend_<timestamp>.json`
+- `vulnerability_trend_<timestamp>.md`
+
 ## Project Layout
 
-- `scanner.py`: main CLI and report generation.
+- `network_scanner/scanner.py`: main CLI and report generation.
+- `network_scanner/core/ui.py`: interactive TUI for scan setup and JSON report review.
 - `network_scanner/settings.py`: scan profile and port defaults.
 - `network_scanner/modules/ping_sweep.py`: host discovery.
 - `network_scanner/modules/port_scanner.py`: TCP port scanner.
 - `network_scanner/modules/service_scan.py`: service, HTTP, and TLS fingerprinting.
 - `network_scanner/checks/`: vulnerability check framework and built-in checks.
 - `network_scanner/modules/risk.py`: service risk scoring.
-- `network_scanner/modules/report_diff.py`: report comparison.
+- `network_scanner/modules/report_diff.py`: report comparison and vulnerability trend analysis.
 - `network_scanner/modules/brute_force/`: guarded credential-audit helpers for lab use.
 - `config/exploit_config.yaml`: compatibility config documenting disabled offensive workflows.
 - `tests/`: unit tests.
@@ -141,7 +176,7 @@ The repository CI runs both commands across Python 3.10, 3.11, and 3.12.
 For educational testing, use an isolated host-only or NAT VM network. Good test targets are intentionally vulnerable lab machines or small services you start yourself. Keep scans limited at first:
 
 ```bash
-python scanner.py -t 192.168.56.0/24 --authorized --profile quick --timeout 1
+python -m network_scanner -t 192.168.56.0/24 --authorized --profile quick --timeout 1
 ```
 
 Increase scope only after confirming the target range and VM network are correct.

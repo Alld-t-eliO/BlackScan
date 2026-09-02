@@ -36,10 +36,7 @@ audit = [
 dev = ["pytest>=8.0.0", "ruff>=0.5.0"]
 
 [project.scripts]
-blackscan = "scanner:main"
-
-[tool.setuptools]
-py-modules = ["scanner"]
+blackscan = "network_scanner.scanner:main"
 
 [tool.setuptools.packages.find]
 include = ["network_scanner*"]

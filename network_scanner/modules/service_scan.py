@@ -7,7 +7,7 @@ import tempfile
 from html.parser import HTMLParser
 from urllib.error import HTTPError, URLError
 from urllib.parse import urljoin
-from urllib.request import HTTPRedirectHandler, Request, build_opener, urlopen
+from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener, urlopen
 
 COMMON_PORTS = {
     21: 'FTP',
@@ -65,7 +65,7 @@ class TitleParser(HTMLParser):
         return " ".join(part for part in self.parts if part)[:120]
 
 
-def detect_service(ip, port, timeout=2):
+def detect_service(ip, port, timeout=2, proxy_url=None):
     service_info = {
         'name': COMMON_PORTS.get(port, 'unknown'),
         'banner': '',
@@ -74,7 +74,7 @@ def detect_service(ip, port, timeout=2):
     }
 
     if port in HTTP_PORTS or port in HTTPS_PORTS:
-        service_info['http'] = detect_http(ip, port, timeout)
+        service_info['http'] = detect_http(ip, port, timeout, proxy_url)
         if service_info['http']:
             service_info['name'] = 'HTTPS' if port in HTTPS_PORTS else 'HTTP'
             service_info['banner'] = service_info['http'].get('server', '')
@@ -112,15 +112,15 @@ def detect_service(ip, port, timeout=2):
     return service_info
 
 
-def detect_http(ip, port, timeout=2):
+def detect_http(ip, port, timeout=2, proxy_url=None):
     scheme = 'https' if port in HTTPS_PORTS else 'http'
     url = f'{scheme}://{ip}:{port}/'
     try:
-        redirects = fetch_redirects(url, timeout)
+        redirects = fetch_redirects(url, timeout, proxy_url=proxy_url)
         request = Request(url, headers={'User-Agent': 'BlackScan/1.0'})
         response = None
         try:
-            response = urlopen(request, timeout=timeout)
+            response = open_url(request, timeout, proxy_url)
         except HTTPError as exc:
             response = exc
         try:
@@ -132,6 +132,7 @@ def detect_http(ip, port, timeout=2):
             return {
                 'url': url,
                 'status': getattr(response, 'status', None) or getattr(response, 'code', 0),
+                'proxy': proxy_url or '',
                 'redirects': redirects,
                 'server': headers.get('Server', ''),
                 'powered_by': headers.get('X-Powered-By', ''),
@@ -139,10 +140,10 @@ def detect_http(ip, port, timeout=2):
                 'headers': headers,
                 'security_headers': summarize_security_headers(headers),
                 'cookies': cookies,
-                'favicon_hash': fetch_favicon_hash(url, timeout),
+                'favicon_hash': fetch_favicon_hash(url, timeout, proxy_url=proxy_url),
                 'technologies': detect_technologies(headers, body),
-                'common_paths': probe_common_paths(url, timeout),
-                'sensitive_paths': probe_paths(url, SENSITIVE_WEB_PATHS, timeout),
+                'common_paths': probe_common_paths(url, timeout, proxy_url=proxy_url),
+                'sensitive_paths': probe_paths(url, SENSITIVE_WEB_PATHS, timeout, proxy_url=proxy_url),
             }
         finally:
             if response:
@@ -156,10 +157,28 @@ class NoRedirectHandler(HTTPRedirectHandler):
         return None
 
 
-def fetch_redirects(url, timeout=2, limit=5):
+def open_url(request, timeout=2, proxy_url=None):
+    if not proxy_url:
+        return urlopen(request, timeout=timeout)
+    opener = build_proxy_opener(proxy_url)
+    return opener.open(request, timeout=timeout)
+
+
+def build_proxy_opener(proxy_url):
+    return build_opener(ProxyHandler({'http': proxy_url, 'https': proxy_url}))
+
+
+def build_no_redirect_opener(proxy_url=None):
+    handlers = [NoRedirectHandler()]
+    if proxy_url:
+        handlers.append(ProxyHandler({'http': proxy_url, 'https': proxy_url}))
+    return build_opener(*handlers)
+
+
+def fetch_redirects(url, timeout=2, limit=5, proxy_url=None):
     redirects = []
     current_url = url
-    opener = build_opener(NoRedirectHandler)
+    opener = build_no_redirect_opener(proxy_url)
 
     for _ in range(limit):
         try:
@@ -219,10 +238,10 @@ def summarize_security_headers(headers):
     }
 
 
-def fetch_favicon_hash(base_url, timeout=2):
+def fetch_favicon_hash(base_url, timeout=2, proxy_url=None):
     try:
         request = Request(urljoin(base_url, '/favicon.ico'), headers={'User-Agent': 'BlackScan/1.0'})
-        with urlopen(request, timeout=timeout) as response:
+        with open_url(request, timeout, proxy_url) as response:
             data = response.read(65536)
         if not data:
             return ''
@@ -251,13 +270,13 @@ def detect_technologies(headers, body):
     return sorted(name for name, needles in signatures.items() if any(needle in haystack for needle in needles))
 
 
-def probe_common_paths(base_url, timeout=2):
-    return probe_paths(base_url, COMMON_WEB_PATHS, timeout)
+def probe_common_paths(base_url, timeout=2, proxy_url=None):
+    return probe_paths(base_url, COMMON_WEB_PATHS, timeout, proxy_url=proxy_url)
 
 
-def probe_paths(base_url, paths, timeout=2):
+def probe_paths(base_url, paths, timeout=2, proxy_url=None):
     results = []
-    opener = build_opener(NoRedirectHandler)
+    opener = build_no_redirect_opener(proxy_url)
     for path in paths:
         url = urljoin(base_url, path)
         try:

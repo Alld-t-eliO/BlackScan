@@ -9,14 +9,27 @@ BlackScan/
 ├── network_scanner/
 │   ├── __init__.py
 │   ├── __main__.py
+│   ├── scanner.py
 │   ├── settings.py
+│   ├── core/
+│   │   ├── __init__.py
+│   │   └── ui.py
 │   ├── checks/
 │   │   ├── __init__.py
 │   │   ├── base.py
 │   │   └── builtin.py
 │   ├── modules/
 │   │   ├── __init__.py
+│   │   ├── auto_exploit.py
+│   │   ├── interactive.py
 │   │   ├── external_tools.py
+│   │   ├── brute_force/
+│   │   │   ├── __init__.py
+│   │   │   ├── base.py
+│   │   │   ├── ftp.py
+│   │   │   ├── http_basic.py
+│   │   │   ├── mysql.py
+│   │   │   └── ssh.py
 │   │   ├── os_detection.py
 │   │   ├── ping_sweep.py
 │   │   ├── port_scanner.py
@@ -24,10 +37,17 @@ BlackScan/
 │   │   ├── risk.py
 │   │   ├── service_scan.py
 │   │   └── vulnerability.py
+│   ├── payloads/
+│   │   ├── __init__.py
+│   │   └── base.py
 │   └── utils/
 │       ├── logger.py
 │       └── utils.py
+├── config/
+│   └── exploit_config.yaml
+├── docs/
 ├── tests/
+│   ├── __init__.py
 │   └── test_scanner.py
 ├── .gitignore
 ├── CONTRIBUTING.md
@@ -35,9 +55,29 @@ BlackScan/
 ├── README.md
 ├── SECURITY.md
 ├── pyproject.toml
-├── requirements.txt
-├── scanner.py
-└── struct.txt
+└── requirements.txt
+
+Key responsibilities:
+├── network_scanner/scanner.py
+│   └── CLI entrypoint, orchestration, summaries, and JSON/HTML/CSV/Markdown reports
+├── network_scanner/core/ui.py
+│   └── Interactive TUI for scan setup, external-tool listing, and JSON report review
+├── network_scanner/modules/ping_sweep.py
+│   └── Host discovery with ICMP and TCP fallback probes
+├── network_scanner/modules/port_scanner.py
+│   └── Async TCP connect scanning
+├── network_scanner/modules/service_scan.py
+│   └── Service names, banners, HTTP metadata, TLS metadata, proxy-aware web requests, and web path probing
+├── network_scanner/checks/
+│   └── Built-in exposure checks and check framework
+├── network_scanner/modules/risk.py
+│   └── Service risk factors and severity scoring
+├── network_scanner/modules/report_diff.py
+│   └── Point-in-time report diffs and multi-report vulnerability trend analysis
+├── network_scanner/modules/brute_force/
+│   └── Guarded credential-audit compatibility helpers, not exposed by the main CLI
+└── config/exploit_config.yaml
+    └── Documents disabled exploitation-oriented legacy settings
 
 Ignored/generated locally:
 ├── .git/

@@ -198,7 +198,8 @@ class SensitiveWebPathExposure(Check):
 
     def run(self, host, port, service):
         for item in service.get('http', {}).get('sensitive_paths', []):
-            if item.get('interesting') and item.get('path') in self.sensitive_paths:
+            status = item.get('status', 0)
+            if 200 <= status < 300 and item.get('path') in self.sensitive_paths:
                 evidence = f"{item['path']} HTTP {item['status']} - {self.sensitive_paths[item['path']]}"
                 return self.finding(host, port, evidence)
         return None
