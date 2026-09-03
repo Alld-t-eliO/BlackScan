@@ -9,8 +9,14 @@ BlackScan/
 ├── network_scanner/
 │   ├── __init__.py
 │   ├── __main__.py
-│   ├── scanner.py
 │   ├── settings.py
+│   ├── scanner/
+│   │   ├── __init__.py
+│   │   ├── main.py
+│   │   ├── scan.py
+│   │   ├── report.py
+│   │   ├── comparaison.py
+│   │   └── parser.py
 │   ├── core/
 │   │   ├── __init__.py
 │   │   └── ui.py
@@ -46,6 +52,10 @@ BlackScan/
 ├── config/
 │   └── exploit_config.yaml
 ├── docs/
+│   ├── images/
+│   │   ├── blackscan-home.png
+│   │   └── blackscan-scan-example.png
+│   └── struct.txt
 ├── tests/
 │   ├── __init__.py
 │   └── test_scanner.py
@@ -58,10 +68,22 @@ BlackScan/
 └── requirements.txt
 
 Key responsibilities:
-├── network_scanner/scanner.py
-│   └── CLI entrypoint, orchestration, summaries, and JSON/HTML/CSV/Markdown reports
+├── network_scanner/__main__.py
+│   └── Module entrypoint for python -m network_scanner
+├── network_scanner/scanner/main.py
+│   └── CLI orchestration and command routing
+├── network_scanner/scanner/scan.py
+│   └── NetworkScanner class, host scanning, service scanning, progress callbacks, and scan flow
+├── network_scanner/scanner/report.py
+│   └── Colors, report mixin, summaries, and JSON/HTML/CSV/Markdown report generation
+├── network_scanner/scanner/comparaison.py
+│   └── Multi-report vulnerability trend report generation
+├── network_scanner/scanner/parser.py
+│   └── CLI parser, port parsing, proxy validation, and proxy masking
+├── network_scanner/scanner/__init__.py
+│   └── Public scanner package exports for backward-compatible imports
 ├── network_scanner/core/ui.py
-│   └── Interactive TUI for scan setup, external-tool listing, and JSON report review
+│   └── Interactive TUI for scan setup, saved target profiles, scan progress, external-tool listing, and JSON report review
 ├── network_scanner/modules/ping_sweep.py
 │   └── Host discovery with ICMP and TCP fallback probes
 ├── network_scanner/modules/port_scanner.py
@@ -87,4 +109,5 @@ Ignored/generated locally:
 ├── venv/
 ├── __pycache__/
 ├── .DS_Store
-└── scan/report JSON, HTML, and CSV outputs
+├── scan/report JSON, HTML, CSV, and Markdown outputs
+└── ~/.blackscan/profiles.json for saved TUI target profiles

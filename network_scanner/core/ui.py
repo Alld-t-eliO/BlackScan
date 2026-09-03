@@ -155,6 +155,19 @@ def apply_target_profile(form, profile):
     return form
 
 
+def validate_target_profile(profile):
+    errors = []
+    if not profile['name']:
+        errors.append('Profile name is required')
+    if not profile['ip'] and not profile['url']:
+        errors.append('Add an IP, host, CIDR, or HTTPS URL')
+    if profile['url']:
+        parsed = urlsplit(profile['url'])
+        if parsed.scheme != 'https' or not parsed.netloc:
+            errors.append('HTTPS URL must start with https://')
+    return errors
+
+
 def validate_scan_form(form):
     errors = []
     if not form['target'].strip():
@@ -424,16 +437,16 @@ def _run_scan_form(stdscr, output_dir, target_profile=None):
             if y >= height - 5:
                 break
             field_number = field_index + 1
-            attr = _field_attr(field, form[field])
             value = _field_display_value(field, form[field])
             label = field.replace('_', ' ').title()
-            _safe_addnstr(stdscr, y, x, f'[{field_number:02}] {label:18} {value}', column_width, attr)
+            attr = _field_attr(field, form[field])
+            _draw_numbered_row(stdscr, y, x, f'{field_number:02}', f'{label:18} {value}', column_width, attr)
 
         command_y = min(height - 4, start_y + rows_per_column + 1)
-        _safe_addnstr(stdscr, command_y, 4, '[97] Load saved profile', width - 8, _color_attr('accent'))
-        _safe_addnstr(stdscr, command_y + 1, 4, '[98] Start scan', width - 8, _color_attr('accent', curses.A_BOLD))
-        _safe_addnstr(stdscr, command_y + 2, 4, '[99] Cycle scan type', width - 8, _color_attr('accent'))
-        _safe_addnstr(stdscr, command_y + 3, 4, '[00] Back', width - 8, _color_attr('muted'))
+        _draw_numbered_row(stdscr, command_y, 4, '97', 'Load saved profile', width - 8, _color_attr('text'))
+        _draw_numbered_row(stdscr, command_y + 1, 4, '98', 'Start scan', width - 8, _color_attr('text', curses.A_BOLD))
+        _draw_numbered_row(stdscr, command_y + 2, 4, '99', 'Cycle scan type', width - 8, _color_attr('text'))
+        _draw_numbered_row(stdscr, command_y + 3, 4, '00', 'Back', width - 8, _color_attr('text'))
         stdscr.refresh()
 
         choice_text = _prompt(stdscr, 'Choice')
@@ -499,17 +512,25 @@ def _run_profiles_viewer(stdscr, output_dir):
 
         y = 7
         _draw_numbered_choice(stdscr, y, 4, 1, 'CREATE PROFILE', width - 8)
-        _draw_numbered_choice(stdscr, y + 1, 4, 2, 'LOAD PROFILE FOR SCAN', width - 8)
-        _draw_numbered_choice(stdscr, y + 2, 4, 3, 'DELETE PROFILE', width - 8)
-        _safe_addnstr(stdscr, y + 3, 4, '[0] Back', width - 8, _color_attr('header', curses.A_BOLD))
+        _draw_numbered_choice(stdscr, y + 1, 4, 2, 'EDIT PROFILE', width - 8)
+        _draw_numbered_choice(stdscr, y + 2, 4, 3, 'LOAD PROFILE FOR SCAN', width - 8)
+        _draw_numbered_choice(stdscr, y + 3, 4, 4, 'DELETE PROFILE', width - 8)
+        _draw_numbered_row(stdscr, y + 4, 4, '0', 'Back', width - 8, _color_attr('text', curses.A_BOLD))
 
-        list_y = y + 5
+        list_y = y + 6
         _draw_section_title(stdscr, list_y, 2, 'SAVED PROFILES', width - 4)
         if not profiles:
             _safe_addnstr(stdscr, list_y + 1, 4, 'No saved profiles', width - 8, _color_attr('muted'))
         for index, profile in enumerate(profiles[:max(0, height - list_y - 3)], start=1):
-            line = f'[{index:02}] {profile["name"]} -> {profile_display_target(profile)}'
-            _safe_addnstr(stdscr, list_y + index, 4, line, width - 8, _color_attr('text'))
+            _draw_numbered_row(
+                stdscr,
+                list_y + index,
+                4,
+                f'{index:02}',
+                f'{profile["name"]} -> {profile_display_target(profile)}',
+                width - 8,
+                _color_attr('text'),
+            )
 
         _safe_addnstr(stdscr, height - 2, 2, 'Type a number and press Enter. 0 goes back.', width - 4, _color_attr('muted'))
         stdscr.refresh()
@@ -519,14 +540,18 @@ def _run_profiles_viewer(stdscr, output_dir):
         if choice_text == '1':
             message = _create_target_profile(stdscr)
         elif choice_text == '2':
+            message = _edit_target_profile(stdscr, profiles)
+        elif choice_text == '3':
             loaded = _choose_target_profile(stdscr, profiles, 'LOAD PROFILE')
             if loaded:
                 return {'action': 'load_profile', 'profile': loaded}
             message = ''
-        elif choice_text == '3':
-            deleted = _choose_target_profile(stdscr, profiles, 'DELETE PROFILE')
-            if deleted:
-                remaining = [profile for profile in profiles if profile['name'] != deleted['name']]
+        elif choice_text == '4':
+            selected = _choose_target_profile_index(stdscr, profiles, 'DELETE PROFILE')
+            if selected is not None:
+                deleted = profiles[selected]
+                remaining = list(profiles)
+                del remaining[selected]
                 save_target_profiles(remaining)
                 message = f'Deleted profile: {deleted["name"]}'
             else:
@@ -546,17 +571,56 @@ def _create_target_profile(stdscr):
     if url in {'0', '00'} or url.lower() in {'b', 'back'}:
         return ''
     profile = normalize_target_profile({'name': name, 'ip': ip, 'url': url})
-    if not profile['name']:
-        return 'ERROR: Profile name is required'
-    if not profile['ip'] and not profile['url']:
-        return 'ERROR: Add an IP, host, CIDR, or HTTPS URL'
+    errors = validate_target_profile(profile)
+    if errors:
+        return f'ERROR: {errors[0]}'
     profiles = [item for item in load_target_profiles() if item['name'] != profile['name']]
     profiles.append(profile)
     save_target_profiles(sorted(profiles, key=lambda item: item['name'].lower()))
     return f'Saved profile: {profile["name"]}'
 
 
+def _edit_target_profile(stdscr, profiles):
+    selected = _choose_target_profile_index(stdscr, profiles, 'EDIT PROFILE')
+    if selected is None:
+        return ''
+    current = profiles[selected]
+    name = _prompt(stdscr, 'Profile name', current['name'])
+    if name in {'0', '00'} or name.lower() in {'b', 'back'}:
+        return ''
+    ip = _prompt_clearable(stdscr, 'IP, host, or CIDR', current['ip'])
+    if ip is None:
+        return ''
+    url = _prompt_clearable(stdscr, 'HTTPS URL', current['url'])
+    if url is None:
+        return ''
+    updated = normalize_target_profile({'name': name, 'ip': ip, 'url': url})
+    errors = validate_target_profile(updated)
+    if errors:
+        return f'ERROR: {errors[0]}'
+    remaining = [profile for index, profile in enumerate(profiles) if index != selected and profile['name'] != updated['name']]
+    remaining.append(updated)
+    save_target_profiles(sorted(remaining, key=lambda item: item['name'].lower()))
+    return f'Updated profile: {updated["name"]}'
+
+
+def _prompt_clearable(stdscr, label, current=''):
+    value = _prompt(stdscr, f'{label} (- clears)', current)
+    if value in {'0', '00'} or value.lower() in {'b', 'back'}:
+        return None
+    if value == '-':
+        return ''
+    return value
+
+
 def _choose_target_profile(stdscr, profiles, title):
+    selected = _choose_target_profile_index(stdscr, profiles, title)
+    if selected is None:
+        return None
+    return profiles[selected]
+
+
+def _choose_target_profile_index(stdscr, profiles, title):
     message = ''
     while True:
         height, width = stdscr.getmaxyx()
@@ -568,15 +632,22 @@ def _choose_target_profile(stdscr, profiles, title):
         if not profiles:
             _safe_addnstr(stdscr, 7, 4, 'No saved profiles', width - 8, _color_attr('muted'))
         for index, profile in enumerate(profiles[:max(0, height - 10)], start=1):
-            line = f'[{index:02}] {profile["name"]} -> {profile_display_target(profile)}'
-            _safe_addnstr(stdscr, 6 + index, 4, line, width - 8, _color_attr('text'))
+            _draw_numbered_row(
+                stdscr,
+                6 + index,
+                4,
+                f'{index:02}',
+                f'{profile["name"]} -> {profile_display_target(profile)}',
+                width - 8,
+                _color_attr('text'),
+            )
         _safe_addnstr(stdscr, height - 2, 2, 'Type profile number. 0 goes back.', width - 4, _color_attr('muted'))
         stdscr.refresh()
         choice_text = _prompt(stdscr, 'Choice')
         if choice_text in {'0', '00'} or choice_text.lower() in {'q', 'quit', 'exit', 'b', 'back'}:
             return None
         if choice_text.isdigit() and 1 <= int(choice_text) <= len(profiles):
-            return profiles[int(choice_text) - 1]
+            return int(choice_text) - 1
         message = 'Invalid profile number'
 
 
@@ -911,6 +982,12 @@ def _draw_numbered_choice(stdscr, y, x, number, label, width):
     prefix = f'[{number}] '
     _safe_addnstr(stdscr, y, x, prefix, width, _color_attr('header', curses.A_BOLD))
     _safe_addnstr(stdscr, y, x + len(prefix), label, max(0, width - len(prefix)), _color_attr('text', curses.A_BOLD))
+
+
+def _draw_numbered_row(stdscr, y, x, number, label, width, label_attr):
+    prefix = f'[{number}] '
+    _safe_addnstr(stdscr, y, x, prefix, width, _color_attr('header', curses.A_BOLD))
+    _safe_addnstr(stdscr, y, x + len(prefix), label, max(0, width - len(prefix)), label_attr)
 
 
 def _draw_logo(stdscr, y, x, width, compact=False):
