@@ -1,6 +1,3 @@
-#!/usr/bin/env python3
-"""BlackScan network scanner CLI."""
-
 import argparse
 import csv
 import html
@@ -38,7 +35,6 @@ class Colors:
 
 
 def parse_ports(value):
-    """Parse comma-separated ports and ranges such as 22,80,8000-8100."""
     ports = set()
     for chunk in value.split(','):
         chunk = chunk.strip()
@@ -61,7 +57,6 @@ def parse_ports(value):
 
 
 def validate_proxy_url(value):
-    """Validate an HTTP(S) proxy URL for urllib ProxyHandler."""
     if not value:
         return None
     parsed = urlsplit(value)
@@ -71,7 +66,6 @@ def validate_proxy_url(value):
 
 
 def mask_proxy_url(value):
-    """Mask proxy credentials before writing scan metadata."""
     if not value:
         return ''
     parsed = urlsplit(value)
@@ -166,6 +160,8 @@ class NetworkScanner:
         host_workers=10,
         service_workers=32,
         proxy_url=None,
+        progress_callback=None,
+        log_callback=None,
     ):
         self.target = target
         self.threads = max(1, threads)
@@ -180,6 +176,8 @@ class NetworkScanner:
         self.host_workers = max(1, host_workers)
         self.service_workers = max(1, service_workers)
         self.proxy_url = proxy_url
+        self.progress_callback = progress_callback
+        self.log_callback = log_callback
         self.results = {
             'hosts': [],
             'open_ports': {},
@@ -190,22 +188,38 @@ class NetworkScanner:
         }
         self.start_time = datetime.now(timezone.utc)
 
-    def scan_network(self):
-        self.print_banner()
+    def emit_progress(self, percent, message=''):
+        if self.progress_callback:
+            self.progress_callback(max(0, min(100, int(percent))), message)
 
-        print(f"{Colors.BLUE}[*] Step 1: host discovery...{Colors.RESET}")
+    def emit_log(self, message):
+        if self.log_callback:
+            self.log_callback(message)
+        else:
+            print(message)
+
+    def scan_network(self):
+        self.emit_log(f"{Colors.BOLD}{Colors.CYAN}BlackScan - Network Vulnerability Scanner{Colors.RESET}")
+        self.emit_log(f"{Colors.YELLOW}Use this tool only on systems you are authorized to assess.{Colors.RESET}\n")
+
+        self.emit_progress(1, 'Host discovery')
+        self.emit_log(f"{Colors.BLUE}[*] Step 1: host discovery...{Colors.RESET}")
         hosts = ping_sweep.sweep(self.target, self.threads, self.timeout, self.max_hosts)
 
         if not hosts:
-            print(f"{Colors.RED}[!] No hosts found on {self.target}{Colors.RESET}")
+            self.emit_progress(100, 'No hosts found')
+            self.emit_log(f"{Colors.RED}[!] No hosts found on {self.target}{Colors.RESET}")
             return None
 
         self.results['hosts'] = sorted(hosts)
-        print(f"{Colors.GREEN}[+] {len(hosts)} host(s) found{Colors.RESET}")
-        print(f"\n{Colors.BLUE}[*] Step 2: scanning {len(self.ports)} port(s)...{Colors.RESET}")
+        self.emit_progress(10, f'{len(hosts)} host(s) found')
+        self.emit_log(f"{Colors.GREEN}[+] {len(hosts)} host(s) found{Colors.RESET}")
+        self.emit_log(f"\n{Colors.BLUE}[*] Step 2: scanning {len(self.ports)} port(s)...{Colors.RESET}")
 
         scan_results = {}
         workers = min(self.host_workers, len(self.results['hosts']))
+        completed_hosts = 0
+        total_hosts = len(self.results['hosts'])
         with ThreadPoolExecutor(max_workers=workers) as executor:
             futures = {executor.submit(self.scan_host, host): host for host in self.results['hosts']}
             for future in as_completed(futures):
@@ -213,10 +227,12 @@ class NetworkScanner:
                 try:
                     host_result = future.result()
                 except (OSError, RuntimeError, ValueError) as exc:
-                    print(f"{Colors.RED}[!] Failed to scan {host}: {exc}{Colors.RESET}")
+                    self.emit_log(f"{Colors.RED}[!] Failed to scan {host}: {exc}{Colors.RESET}")
                     continue
                 if host_result:
                     scan_results[host] = host_result
+                completed_hosts += 1
+                self.emit_progress(10 + (completed_hosts * 75 / total_hosts), f'Scanned {completed_hosts}/{total_hosts} host(s)')
 
         for host in self.results['hosts']:
             host_result = scan_results.get(host)
@@ -229,10 +245,13 @@ class NetworkScanner:
             self.results['vulnerabilities'].update(host_result['vulnerabilities'])
             self.results['risks'].update(host_result['risks'])
 
-        return self.generate_report()
+        self.emit_progress(90, 'Generating reports')
+        reports = self.generate_report()
+        self.emit_progress(100, 'Scan complete')
+        return reports
 
     def scan_host(self, host):
-        print(f"\n{Colors.CYAN}[*] Scanning {host}{Colors.RESET}")
+        self.emit_log(f"\n{Colors.CYAN}[*] Scanning {host}{Colors.RESET}")
         open_ports = port_scanner.scan_ports(host, self.ports, self.threads, self.timeout)
 
         if not open_ports:
@@ -252,7 +271,7 @@ class NetworkScanner:
             if os_info:
                 host_result['os'] = os_info
                 label = os_info.get('family', 'Unknown') if isinstance(os_info, dict) else os_info
-                print(f"    {Colors.PURPLE}[+] Probable OS: {label}{Colors.RESET}")
+                self.emit_log(f"    {Colors.PURPLE}[+] Probable OS: {label}{Colors.RESET}")
 
         workers = min(self.service_workers, len(open_ports))
         with ThreadPoolExecutor(max_workers=workers) as executor:
@@ -262,7 +281,7 @@ class NetworkScanner:
                 try:
                     service, vulns, risk_info = future.result()
                 except (OSError, RuntimeError, ValueError) as exc:
-                    print(f"    {Colors.RED}[!] Failed to fingerprint {host}:{port}: {exc}{Colors.RESET}")
+                    self.emit_log(f"    {Colors.RED}[!] Failed to fingerprint {host}:{port}: {exc}{Colors.RESET}")
                     service = {'name': 'unknown', 'banner': '', 'http': {}, 'tls': {}}
                     vulns = []
                     risk_info = risk.score_service(host, port, service, vulns)
@@ -279,21 +298,21 @@ class NetworkScanner:
         service_name = service.get('name', 'unknown')
         banner = service.get('banner', '').replace('\n', ' ')[:80]
         banner_display = f" ({banner})" if banner else ""
-        print(f"    {Colors.GREEN}[+] Port {port}/tcp: {service_name}{banner_display}{Colors.RESET}")
+        self.emit_log(f"    {Colors.GREEN}[+] Port {port}/tcp: {service_name}{banner_display}{Colors.RESET}")
 
         vulns = vulnerability.check_vulnerabilities(host, port, service, self.intrusive_checks) if self.aggressive else []
         if vulns:
             for vuln in vulns:
-                print(f"    {Colors.RED}[!] {vuln['severity'].upper()}: {vuln['name']}{Colors.RESET}")
+                self.emit_log(f"    {Colors.RED}[!] {vuln['severity'].upper()}: {vuln['name']}{Colors.RESET}")
 
         risk_info = risk.score_service(host, port, service, vulns)
         if risk_info['score'] in {'medium', 'high'}:
-            print(f"    {Colors.YELLOW}[!] {risk_info['score']} risk: {host}:{port}{Colors.RESET}")
+            self.emit_log(f"    {Colors.YELLOW}[!] {risk_info['score']} risk: {host}:{port}{Colors.RESET}")
 
         return service, vulns, risk_info
 
     def generate_report(self):
-        print(f"\n{Colors.BLUE}[*] Generating reports...{Colors.RESET}")
+        self.emit_log(f"\n{Colors.BLUE}[*] Generating reports...{Colors.RESET}")
         os.makedirs(self.output_dir, exist_ok=True)
 
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
@@ -330,7 +349,7 @@ class NetworkScanner:
 
         with open(report_filename, 'w', encoding='utf-8') as f:
             json.dump(report, f, indent=2, ensure_ascii=False)
-        print(f"{Colors.GREEN}[+] JSON report: {report_filename}{Colors.RESET}")
+        self.emit_log(f"{Colors.GREEN}[+] JSON report: {report_filename}{Colors.RESET}")
 
         self.generate_html_report(report, html_filename)
         self.generate_csv_report(report, csv_filename)
@@ -376,7 +395,7 @@ class NetworkScanner:
             )
             writer.writeheader()
             writer.writerows(rows)
-        print(f"{Colors.GREEN}[+] CSV report: {filename}{Colors.RESET}")
+        self.emit_log(f"{Colors.GREEN}[+] CSV report: {filename}{Colors.RESET}")
 
     def generate_html_report(self, report, filename):
         safe = html.escape
@@ -467,7 +486,7 @@ class NetworkScanner:
 
         with open(filename, 'w', encoding='utf-8') as f:
             f.write('\n'.join(parts))
-        print(f"{Colors.GREEN}[+] HTML report: {filename}{Colors.RESET}")
+        self.emit_log(f"{Colors.GREEN}[+] HTML report: {filename}{Colors.RESET}")
 
     def generate_markdown_report(self, report, filename):
         result = report['results']
@@ -526,24 +545,24 @@ class NetworkScanner:
 
         with open(filename, 'w', encoding='utf-8') as f:
             f.write('\n'.join(lines))
-        print(f"{Colors.GREEN}[+] Markdown report: {filename}{Colors.RESET}")
+        self.emit_log(f"{Colors.GREEN}[+] Markdown report: {filename}{Colors.RESET}")
 
     def show_summary(self):
         total_ports = sum(len(ports) for ports in self.results['open_ports'].values())
         total_vulns = sum(len(vulns) for vulns in self.results['vulnerabilities'].values())
         risk_counts = self.count_risks(self.results)
-        print(f"\n{Colors.PURPLE}{'=' * 60}{Colors.RESET}")
-        print(f"{Colors.YELLOW}SCAN SUMMARY{Colors.RESET}")
-        print(f"{Colors.PURPLE}{'=' * 60}{Colors.RESET}")
-        print(f"{Colors.WHITE}Hosts found: {len(self.results['hosts'])}{Colors.RESET}")
-        print(f"{Colors.WHITE}Open ports: {total_ports}{Colors.RESET}")
-        print(f"{Colors.WHITE}Services identified: {sum(len(services) for services in self.results['services'].values())}{Colors.RESET}")
-        print(f"{Colors.WHITE}High risks: {risk_counts.get('high', 0)}{Colors.RESET}")
+        self.emit_log(f"\n{Colors.PURPLE}{'=' * 60}{Colors.RESET}")
+        self.emit_log(f"{Colors.YELLOW}SCAN SUMMARY{Colors.RESET}")
+        self.emit_log(f"{Colors.PURPLE}{'=' * 60}{Colors.RESET}")
+        self.emit_log(f"{Colors.WHITE}Hosts found: {len(self.results['hosts'])}{Colors.RESET}")
+        self.emit_log(f"{Colors.WHITE}Open ports: {total_ports}{Colors.RESET}")
+        self.emit_log(f"{Colors.WHITE}Services identified: {sum(len(services) for services in self.results['services'].values())}{Colors.RESET}")
+        self.emit_log(f"{Colors.WHITE}High risks: {risk_counts.get('high', 0)}{Colors.RESET}")
         if total_vulns:
-            print(f"{Colors.RED}{total_vulns} potential vulnerability/vulnerabilities found{Colors.RESET}")
+            self.emit_log(f"{Colors.RED}{total_vulns} potential vulnerability/vulnerabilities found{Colors.RESET}")
         else:
-            print(f"{Colors.GREEN}No major vulnerabilities detected{Colors.RESET}")
-        print(f"{Colors.PURPLE}{'=' * 60}{Colors.RESET}\n")
+            self.emit_log(f"{Colors.GREEN}No major vulnerabilities detected{Colors.RESET}")
+        self.emit_log(f"{Colors.PURPLE}{'=' * 60}{Colors.RESET}\n")
 
     @staticmethod
     def count_risks(results):

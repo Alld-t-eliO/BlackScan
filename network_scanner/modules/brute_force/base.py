@@ -1,4 +1,3 @@
-"""Guarded base classes for credential-audit workflows."""
 
 import asyncio
 import socket
@@ -12,12 +11,11 @@ from ...payloads.base import Credentials, WordlistManager
 
 
 class SafetyError(RuntimeError):
-    """Raised when a credential-audit workflow is not explicitly authorized."""
+    pass
 
 
 @dataclass(frozen=True)
 class BruteForcePolicy:
-    """Safety policy required before any credential-audit workflow can run."""
 
     authorized: bool = False
     intrusive_checks: bool = False
@@ -33,7 +31,6 @@ class BruteForcePolicy:
 
 @dataclass
 class BruteForceResult:
-    """Result of a guarded credential-audit workflow."""
 
     success: bool
     credentials: Credentials | None = None
@@ -61,7 +58,6 @@ class BruteForceResult:
 
 
 class BruteForceBase(ABC):
-    """Abstract base class for guarded credential-audit workflows."""
 
     def __init__(self, host: str, port: int, timeout: int = 3, max_threads: int = 2):
         self.host = host
@@ -72,15 +68,15 @@ class BruteForceBase(ABC):
 
     @abstractmethod
     async def try_credentials(self, credentials: Credentials) -> bool:
-        """Try a login with the provided credentials."""
+        pass
 
     @abstractmethod
     def get_default_username_list(self) -> list[str]:
-        """Return the default username list."""
+        pass
 
     @abstractmethod
     def get_default_password_list(self) -> list[str]:
-        """Return the default password list."""
+        pass
 
     async def attack(
         self,
@@ -88,7 +84,6 @@ class BruteForceBase(ABC):
         password_list: list[str] | None = None,
         policy: BruteForcePolicy | None = None,
     ) -> BruteForceResult:
-        """Run a guarded credential-audit workflow."""
 
         policy = policy or BruteForcePolicy()
         try:
@@ -160,7 +155,6 @@ class BruteForceBase(ABC):
         )
 
     def create_socket(self) -> socket.socket:
-        """Create a TCP socket."""
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.settimeout(self.timeout)
         return sock

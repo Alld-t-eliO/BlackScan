@@ -1,10 +1,8 @@
-"""MySQL credential-audit workflow placeholder."""
 
 from .base import BruteForceBase, SafetyError
 
 
 class MySQLBruteForce(BruteForceBase):
-    """Disabled MySQL credential-audit workflow."""
 
     def get_default_username_list(self) -> list[str]:
         return ['root']

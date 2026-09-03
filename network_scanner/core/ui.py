@@ -4,7 +4,11 @@ try:
 except ImportError:  
     curses = None
 import json
+import queue
+import re
 import shutil
+import threading
+import time
 from pathlib import Path
 
 RISK_ORDER = {'high': 0, 'medium': 1, 'low': 2, 'info': 3}
@@ -18,6 +22,7 @@ PROFILE_DESCRIPTIONS = {
 }
 EXTERNAL_TOOLS = ('nmap', 'nuclei', 'httpx', 'subfinder', 'dnsx')
 MAIN_MENU = ('New scan', 'Open latest report', 'Open report path', 'List external tools', 'Quit')
+ANSI_RE = re.compile(r'\x1b\[[0-9;]*m')
 LOGO = (
     r'__________.__                 __      _________                     ',
     r'\______   \  | _____    ____ |  | __ /   _____/ ____ _____    ____  ',
@@ -33,6 +38,7 @@ THEME = {
     'selection': 3,
     'error': 4,
     'muted': 5,
+    'text': 7,
     'risk_high': 4,
     'risk_medium': 6,
     'risk_low': 2,
@@ -131,7 +137,6 @@ def external_tool_inventory():
 
 
 def profile_status_lines(active_profile):
-    """Return display rows for scan profiles."""
     rows = []
     for profile in PROFILES:
         marker = '>' if profile == active_profile else ' '
@@ -140,13 +145,11 @@ def profile_status_lines(active_profile):
 
 
 def load_report(path):
-    """Load a BlackScan JSON report."""
     with open(path, encoding='utf-8') as handle:
         return json.load(handle)
 
 
 def flatten_services(report):
-    """Flatten report services into sorted rows for the TUI."""
     results = report.get('results', {})
     rows = []
     for host, ports in results.get('services', {}).items():
@@ -168,7 +171,6 @@ def flatten_services(report):
 
 
 def report_summary(report):
-    """Return high-level report metrics."""
     results = report.get('results', {})
     return {
         'target': report.get('scan_info', {}).get('target', ''),
@@ -181,7 +183,6 @@ def report_summary(report):
 
 
 def service_detail_lines(report, row):
-    """Build detail lines for a selected service row."""
     results = report.get('results', {})
     service = results.get('services', {}).get(row['host'], {}).get(str(row['port']), {})
     risk_info = results.get('risks', {}).get(row['target'], {})
@@ -243,14 +244,12 @@ def service_detail_lines(report, row):
 
 
 def run_app(output_dir='reports'):
-    """Open the main interactive TUI and return the selected action."""
     if curses is None:
         raise RuntimeError('the interactive TUI requires a terminal with curses support')
     return curses.wrapper(_run_main_menu, output_dir)
 
 
 def run_report_viewer(report_path):
-    """Open the report browser directly."""
     if curses is None:
         raise RuntimeError('the interactive TUI requires a terminal with curses support')
     report = load_report(report_path)
@@ -260,7 +259,6 @@ def run_report_viewer(report_path):
 
 
 def run_tui(report_path):
-    """Backward-compatible alias for the report browser."""
     return run_report_viewer(report_path)
 
 
@@ -285,12 +283,12 @@ def _run_main_menu(stdscr, output_dir):
             menu_index = index - start_y
             if index >= height - 2:
                 break
-            _safe_addnstr(stdscr, index, 4, f'[{menu_index + 1}] {item.upper()}', width - 8, _color_attr('accent'))
+            _draw_numbered_choice(stdscr, index, 4, menu_index + 1, item.upper(), width - 8)
 
         _safe_addnstr(stdscr, height - 2, 2, 'Type a number and press Enter. 5 or q quits.', width - 4, _color_attr('muted'))
         stdscr.refresh()
 
-        choice_text = _prompt(stdscr, 'Choice')
+        choice_text = _prompt(stdscr, '> Choice')
         if choice_text.lower() in {'q', 'quit', 'exit'}:
             return {'action': 'quit'}
         if not choice_text.isdigit() or not 1 <= int(choice_text) <= len(MAIN_MENU):
@@ -312,14 +310,17 @@ def _run_main_menu(stdscr, output_dir):
                 message = str(exc)
         elif choice == 'Open report path':
             report_path = _prompt(stdscr, 'JSON report path')
-            if report_path:
+            if report_path in {'0', '00'}:
+                message = ''
+            elif report_path:
                 try:
                     _open_report_inside_tui(stdscr, report_path)
                     message = ''
                 except (OSError, json.JSONDecodeError, ValueError) as exc:
                     message = str(exc)
         elif choice == 'List external tools':
-            return {'action': 'list_external_tools'}
+            _run_external_tools_viewer(stdscr)
+            message = ''
         elif choice == 'Quit':
             return {'action': 'quit'}
 
@@ -340,16 +341,23 @@ def _run_scan_form(stdscr, output_dir):
             _draw_message(stdscr, 6, 2, message, width - 4, is_error=True)
 
         start_y = 8
-        for index, field in enumerate(fields, start=start_y):
-            if index >= height - 5:
+        two_columns = width >= 72
+        column_width = (width - 10) // 2 if two_columns else width - 8
+        rows_per_column = (len(fields) + 1) // 2 if two_columns else len(fields)
+        for field_index, field in enumerate(fields):
+            column = field_index // rows_per_column if two_columns else 0
+            row = field_index % rows_per_column
+            y = start_y + row
+            x = 4 + (column * (column_width + 2))
+            if y >= height - 5:
                 break
-            field_number = index - start_y + 1
+            field_number = field_index + 1
             attr = _field_attr(field, form[field])
             value = _field_display_value(field, form[field])
             label = field.replace('_', ' ').title()
-            _safe_addnstr(stdscr, index, 4, f'[{field_number:02}] {label:18} {value}', width - 8, attr)
+            _safe_addnstr(stdscr, y, x, f'[{field_number:02}] {label:18} {value}', column_width, attr)
 
-        command_y = min(height - 4, start_y + len(fields) + 1)
+        command_y = min(height - 4, start_y + rows_per_column + 1)
         _safe_addnstr(stdscr, command_y, 4, '[98] Start scan', width - 8, _color_attr('accent', curses.A_BOLD))
         _safe_addnstr(stdscr, command_y + 1, 4, '[99] Cycle profile', width - 8, _color_attr('accent'))
         _safe_addnstr(stdscr, command_y + 2, 4, '[00] Back', width - 8, _color_attr('muted'))
@@ -369,7 +377,11 @@ def _run_scan_form(stdscr, output_dir):
             if errors:
                 message = '; '.join(errors[:3])
                 continue
-            return {'action': 'scan', 'options': build_scan_options(form)}
+            result = _run_scan_session(stdscr, build_scan_options(form))
+            if result.get('action') != 'back':
+                return result
+            message = ''
+            continue
         if not choice_text.isdigit() or not 1 <= int(choice_text) <= len(fields):
             message = 'Invalid field number'
             continue
@@ -389,6 +401,121 @@ def _open_report_inside_tui(stdscr, report_path):
     rows = flatten_services(report)
     summary = report_summary(report)
     _run_report_viewer(stdscr, report_path, report, rows, summary)
+
+
+def _run_external_tools_viewer(stdscr):
+    _init_theme()
+    tools = external_tool_inventory()
+    while True:
+        height, width = stdscr.getmaxyx()
+        stdscr.erase()
+        _draw_compact_logo(stdscr, 1, 2, width - 4)
+        _draw_section_title(stdscr, 4, 2, 'EXTERNAL TOOLS', width - 4)
+        y = 6
+        for name in EXTERNAL_TOOLS:
+            if y >= height - 3:
+                break
+            state = 'available' if name in tools['available'] else 'missing'
+            attr = _color_attr('accent' if state == 'available' else 'error', curses.A_BOLD)
+            _safe_addnstr(stdscr, y, 4, f'{name:10} {state}', width - 8, attr)
+            y += 1
+        _safe_addnstr(stdscr, height - 2, 2, 'Type 0 and press Enter to go back.', width - 4, _color_attr('muted'))
+        stdscr.refresh()
+        choice_text = _prompt(stdscr, 'Choice')
+        if choice_text in {'0', '00'} or choice_text.lower() in {'q', 'quit', 'exit', 'b', 'back'}:
+            return {'action': 'back'}
+
+
+def _run_scan_session(stdscr, options):
+    _init_theme()
+    events = queue.Queue()
+    progress = {'percent': 0, 'message': 'Waiting'}
+    logs = []
+    result = {'done': False, 'reports': None, 'error': None}
+
+    def on_progress(percent, message=''):
+        events.put(('progress', percent, message))
+
+    def on_log(message):
+        for line in _strip_ansi(str(message)).splitlines() or ['']:
+            events.put(('log', line, None))
+
+    def worker():
+        try:
+            from network_scanner.scanner import NetworkScanner, parse_ports, validate_proxy_url
+
+            ports = parse_ports(options['ports']) if options['ports'] else None
+            proxy_url = validate_proxy_url(options['proxy'])
+            scanner = NetworkScanner(
+                options['target'],
+                options['threads'],
+                options['timeout'],
+                False,
+                ports,
+                options['output_dir'],
+                options['profile'],
+                options['max_hosts'],
+                options['compare_report'],
+                options['intrusive_checks'],
+                options['host_workers'],
+                options['service_workers'],
+                proxy_url,
+                progress_callback=on_progress,
+                log_callback=on_log,
+            )
+            result['reports'] = scanner.scan_network()
+            events.put(('done', None, None))
+        except Exception as exc:
+            events.put(('error', str(exc), None))
+
+    thread = threading.Thread(target=worker, daemon=True)
+    thread.start()
+    stdscr.nodelay(True)
+
+    try:
+        while True:
+            while True:
+                try:
+                    event = events.get_nowait()
+                except queue.Empty:
+                    break
+                kind = event[0]
+                value = event[1] if len(event) > 1 else None
+                message = event[2] if len(event) > 2 else None
+                if kind == 'progress':
+                    progress['percent'] = value
+                    progress['message'] = message
+                elif kind == 'log':
+                    logs.append(value)
+                    logs[:] = logs[-500:]
+                elif kind == 'done':
+                    result['done'] = True
+                    progress['percent'] = 100
+                    progress['message'] = 'Scan complete'
+                elif kind == 'error':
+                    result['done'] = True
+                    result['error'] = value
+                    progress['percent'] = 100
+                    progress['message'] = 'Scan failed'
+                    logs.append(f'ERROR: {value}')
+
+            height, width = stdscr.getmaxyx()
+            stdscr.erase()
+            _draw_scan_layout(stdscr, options, progress, logs, result, width, height)
+            stdscr.refresh()
+
+            if result['done']:
+                stdscr.nodelay(False)
+                choice_text = _prompt(stdscr, 'Choice')
+                if choice_text in {'0', '00'} or choice_text.lower() in {'b', 'back'}:
+                    return {'action': 'back'}
+                if choice_text == '5' or choice_text.lower() in {'q', 'quit', 'exit'}:
+                    return {'action': 'quit'}
+                stdscr.nodelay(True)
+                logs.append('Type 0 to go back or 5 to quit.')
+            time.sleep(0.1)
+    finally:
+        stdscr.nodelay(False)
 
 
 def _run_report_viewer(stdscr, report_path, report, rows, summary):
@@ -508,6 +635,60 @@ def _draw_details(stdscr, report, rows, selected, list_width, width, height):
         _safe_addnstr(stdscr, index, start_x, line, detail_width, _detail_line_attr(line))
 
 
+def _draw_scan_layout(stdscr, options, progress, logs, result, width, height):
+    split_x = max(38, min(width // 2, 62))
+    right_x = min(width - 1, split_x + 2)
+    left_width = max(1, split_x - 4)
+    right_width = max(1, width - right_x - 1)
+
+    _draw_compact_logo(stdscr, 1, 2, left_width)
+    _draw_section_title(stdscr, 4, 2, 'SCAN CONTROLS', left_width)
+    left_lines = [
+        f"Target: {options['target']}",
+        f"Profile: {options['profile']}",
+        f"Ports: {options['ports'] or '<profile defaults>'}",
+        f"Output: {options['output_dir']}",
+        '',
+        '[0] Back to menu when finished',
+        '[5] Quit when finished',
+    ]
+    for index, line in enumerate(left_lines, start=6):
+        if index >= height - 2:
+            break
+        attr = _color_attr('header' if line.startswith('[') else 'text')
+        _safe_addnstr(stdscr, index, 4, line, left_width, attr)
+
+    _draw_vertical_rule(stdscr, split_x, height)
+    _draw_section_title(stdscr, 1, right_x, 'SCAN PROGRESS', right_width)
+    percent = int(progress['percent'])
+    _safe_addnstr(stdscr, 3, right_x, f'{percent:3}% {progress["message"]}', right_width, _color_attr('accent', curses.A_BOLD))
+    _draw_progress_bar(stdscr, 4, right_x, right_width, percent)
+    _draw_section_title(stdscr, 6, right_x, 'OUTPUT', right_width)
+
+    output_height = max(1, height - 9)
+    for index, line in enumerate(logs[-output_height:], start=8):
+        attr = _color_attr('error', curses.A_BOLD) if 'ERROR:' in line or '[!]' in line else _color_attr('text')
+        _safe_addnstr(stdscr, index, right_x, line, right_width, attr)
+
+    if result['done']:
+        status = 'Done. Type 0 to go back or 5 to quit.'
+        if result['error']:
+            status = 'Failed. Type 0 to go back or 5 to quit.'
+        _safe_addnstr(stdscr, height - 2, right_x, status, right_width, _color_attr('error' if result['error'] else 'accent', curses.A_BOLD))
+
+
+def _draw_progress_bar(stdscr, y, x, width, percent):
+    bar_width = max(10, min(40, width - 8))
+    filled = int(bar_width * max(0, min(100, percent)) / 100)
+    bar = '[' + ('=' * filled).ljust(bar_width) + ']'
+    _safe_addnstr(stdscr, y, x, bar, width, _color_attr('header', curses.A_BOLD))
+
+
+def _draw_vertical_rule(stdscr, x, height):
+    for y in range(1, max(1, height - 1)):
+        _safe_addnstr(stdscr, y, x, '|', 1, _color_attr('muted'))
+
+
 def _init_theme():
     if not curses.has_colors():
         return
@@ -520,6 +701,7 @@ def _init_theme():
         curses.init_pair(THEME['error'], curses.COLOR_RED, -1)
         curses.init_pair(THEME['muted'], curses.COLOR_MAGENTA, -1)
         curses.init_pair(THEME['risk_medium'], curses.COLOR_CYAN, -1)
+        curses.init_pair(THEME['text'], curses.COLOR_WHITE, -1)
     except curses.error:
         pass
 
@@ -535,6 +717,12 @@ def _color_attr(name, extra=0):
 
 def _draw_section_title(stdscr, y, x, title, width):
     _safe_addnstr(stdscr, y, x, f'[{title}]'.ljust(width), width, _color_attr('accent', curses.A_BOLD))
+
+
+def _draw_numbered_choice(stdscr, y, x, number, label, width):
+    prefix = f'[{number}] '
+    _safe_addnstr(stdscr, y, x, prefix, width, _color_attr('header', curses.A_BOLD))
+    _safe_addnstr(stdscr, y, x + len(prefix), label, max(0, width - len(prefix)), _color_attr('text', curses.A_BOLD))
 
 
 def _draw_logo(stdscr, y, x, width, compact=False):
@@ -577,6 +765,10 @@ def _detail_line_attr(line):
     if normalized.endswith(':'):
         return _color_attr('accent', curses.A_BOLD)
     return _color_attr('muted')
+
+
+def _strip_ansi(value):
+    return ANSI_RE.sub('', value)
 
 
 def _safe_addnstr(stdscr, y, x, text, max_width, attr=0):

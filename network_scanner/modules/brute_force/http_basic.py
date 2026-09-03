@@ -1,4 +1,3 @@
-"""HTTP Basic Auth brute force."""
 
 import asyncio
 
@@ -7,7 +6,6 @@ from .base import BruteForceBase
 
 
 class HTTPBasicBruteForce(BruteForceBase):
-    """HTTP Basic Authentication brute-force workflow."""
 
     def __init__(self, host: str, port: int, path: str = '/', **kwargs):
         super().__init__(host, port, **kwargs)
@@ -22,7 +20,6 @@ class HTTPBasicBruteForce(BruteForceBase):
         return WordlistManager.get_wordlist('common_passwords') or ['admin', 'password', '123456', 'test']
 
     async def try_credentials(self, credentials: Credentials) -> bool:
-        """Try an HTTP Basic Auth login."""
 
         try:
             import aiohttp
@@ -36,7 +33,7 @@ class HTTPBasicBruteForce(BruteForceBase):
                 self.url,
                 timeout=self.timeout,
             ) as response:
-                # HTTP 200 = success, 401 = failure.
+
                 return response.status == 200
         except (aiohttp.ClientError, asyncio.TimeoutError):
             return False

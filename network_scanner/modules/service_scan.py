@@ -298,7 +298,6 @@ def probe_paths(base_url, paths, timeout=2, proxy_url=None):
 
 
 def detect_tls(ip, port, timeout=2):
-    """Collect TLS metadata and verify trust plus identity, including IP SANs."""
     tls_info = {
         'sha256_fingerprint': '',
         'not_before': '',
@@ -361,7 +360,6 @@ def verify_tls_identity(hostname, port, timeout=2):
 
 
 def verify_tls_hostname(hostname, port, timeout=2):
-    """Backward-compatible alias for TLS identity verification."""
     return verify_tls_identity(hostname, port, timeout)
 
 

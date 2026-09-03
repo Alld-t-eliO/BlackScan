@@ -1,4 +1,3 @@
-"""FTP brute force."""
 
 import asyncio
 import ftplib
@@ -8,7 +7,6 @@ from .base import BruteForceBase
 
 
 class FTPBruteForce(BruteForceBase):
-    """FTP brute-force workflow."""
 
     def get_default_username_list(self) -> list[str]:
         return ['anonymous', 'ftp', 'admin', 'user', 'test']
@@ -17,7 +15,6 @@ class FTPBruteForce(BruteForceBase):
         return ['', 'anonymous', 'password', 'admin', '123456']
 
     async def try_credentials(self, credentials: Credentials) -> bool:
-        """Try an FTP login."""
 
         def _try_sync():
             try:

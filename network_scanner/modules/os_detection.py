@@ -6,7 +6,6 @@ INITIAL_TTLS = (32, 64, 128, 255)
 
 
 def detect_os(ip, timeout=2):
-    """Estimate an OS family from ICMP TTL and report confidence metadata."""
     ttl = read_ttl(ip, timeout)
     if ttl is None:
         return {

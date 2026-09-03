@@ -1,4 +1,3 @@
-"""Brute-force module for BlackScan."""
 
 from .base import BruteForceBase, BruteForcePolicy, BruteForceResult, SafetyError
 from .ftp import FTPBruteForce

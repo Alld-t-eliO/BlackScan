@@ -1,4 +1,3 @@
-"""SSH brute force."""
 
 import asyncio
 
@@ -7,7 +6,6 @@ from .base import BruteForceBase
 
 
 class SSHBruteForce(BruteForceBase):
-    """SSH brute-force workflow."""
 
     def __init__(self, host: str, port: int = 22, **kwargs):
         super().__init__(host, port, **kwargs)
@@ -29,7 +27,6 @@ class SSHBruteForce(BruteForceBase):
         ]
 
     async def try_credentials(self, credentials: Credentials) -> bool:
-        """Try an SSH login."""
 
         def _try_sync():
             try:
@@ -60,6 +57,6 @@ class SSHBruteForce(BruteForceBase):
                 except OSError:
                     pass
 
-        # Run in a separate thread to avoid blocking the event loop.
+
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(None, _try_sync)
