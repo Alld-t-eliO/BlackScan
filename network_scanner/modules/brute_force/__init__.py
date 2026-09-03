@@ -1,9 +1,13 @@
-
-from .base import BruteForceBase, BruteForcePolicy, BruteForceResult, SafetyError
-from .ftp import FTPBruteForce
-from .http_basic import HTTPBasicBruteForce
-from .mysql import MySQLBruteForce
-from .ssh import SSHBruteForce
+from network_scanner.payloads.payloads import (
+    BruteForceBase,
+    BruteForcePolicy,
+    BruteForceResult,
+    FTPBruteForce,
+    HTTPBasicBruteForce,
+    MySQLBruteForce,
+    SSHBruteForce,
+    SafetyError,
+)
 
 __all__ = [
     'BruteForceBase',
@@ -13,5 +17,5 @@ __all__ = [
     'HTTPBasicBruteForce',
     'MySQLBruteForce',
     'SSHBruteForce',
-    'SafetyError'
+    'SafetyError',
 ]

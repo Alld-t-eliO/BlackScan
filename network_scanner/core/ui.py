@@ -12,6 +12,8 @@ import time
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from network_scanner.payloads import WordlistManager
+
 RISK_ORDER = {'high': 0, 'medium': 1, 'low': 2, 'info': 3}
 PROFILES = ('quick', 'web', 'internal', 'full', 'stealth')
 PROFILE_DESCRIPTIONS = {
@@ -22,7 +24,7 @@ PROFILE_DESCRIPTIONS = {
     'stealth': 'low-noise services',
 }
 EXTERNAL_TOOLS = ('nmap', 'nuclei', 'httpx', 'subfinder', 'dnsx')
-MAIN_MENU = ('New scan', 'Profiles', 'Open latest report', 'Open report path', 'List external tools', 'Quit')
+MAIN_MENU = ('New scan', 'Profiles', 'Payloads', 'Open latest report', 'Open report path', 'List external tools', 'Quit')
 ANSI_RE = re.compile(r'\x1b\[[0-9;]*m')
 VIOLET_COLOR = 99
 PROFILE_STORE = Path.home() / '.blackscan' / 'profiles.json'
@@ -359,7 +361,7 @@ def _run_main_menu(stdscr, output_dir):
                 break
             _draw_numbered_choice(stdscr, index, 4, menu_index + 1, item.upper(), width - 8)
 
-        _safe_addnstr(stdscr, height - 2, 2, 'Type a number and press Enter. 6 or q quits.', width - 4, _color_attr('muted'))
+        _safe_addnstr(stdscr, height - 2, 2, 'Type a number and press Enter. 7 or q quits.', width - 4, _color_attr('muted'))
         stdscr.refresh()
 
         choice_text = _prompt(stdscr, '> Choice')
@@ -381,6 +383,9 @@ def _run_main_menu(stdscr, output_dir):
                 scan_result = _run_scan_form(stdscr, output_dir, result.get('profile'))
                 if scan_result.get('action') != 'back':
                     return scan_result
+            message = ''
+        elif choice == 'Payloads':
+            _run_payloads_viewer(stdscr)
             message = ''
         elif choice == 'Open latest report':
             try:
@@ -496,6 +501,129 @@ def _open_report_inside_tui(stdscr, report_path):
     rows = flatten_services(report)
     summary = report_summary(report)
     _run_report_viewer(stdscr, report_path, report, rows, summary)
+
+
+def _run_payloads_viewer(stdscr):
+    _init_theme()
+    message = ''
+    while True:
+        payloads = WordlistManager.list_wordlists()
+        height, width = stdscr.getmaxyx()
+        stdscr.erase()
+        _draw_compact_logo(stdscr, 1, 2, width - 4)
+        _draw_section_title(stdscr, 4, 2, 'PAYLOADS', width - 4)
+        if message:
+            _draw_message(stdscr, 5, 2, message, width - 4, is_error=message.startswith('ERROR:'))
+
+        y = 7
+        _draw_numbered_choice(stdscr, y, 4, 1, 'VIEW PAYLOAD', width - 8)
+        _draw_numbered_choice(stdscr, y + 1, 4, 2, 'ADD PAYLOAD', width - 8)
+        _draw_numbered_choice(stdscr, y + 2, 4, 3, 'DELETE PAYLOAD', width - 8)
+        _draw_numbered_row(stdscr, y + 3, 4, '0', 'Back', width - 8, _color_attr('text', curses.A_BOLD))
+
+        list_y = y + 5
+        _draw_section_title(stdscr, list_y, 2, 'AVAILABLE PAYLOADS', width - 4)
+        if not payloads:
+            _safe_addnstr(stdscr, list_y + 1, 4, 'No payloads available', width - 8, _color_attr('muted'))
+        for index, payload in enumerate(payloads[:max(0, height - list_y - 3)], start=1):
+            sources = ','.join(payload.get('sources', []))
+            line = f'{payload["name"]} -> {payload.get("count", 0)} entries [{sources}]'
+            _draw_numbered_row(stdscr, list_y + index, 4, f'{index:02}', line, width - 8, _color_attr('text'))
+
+        _safe_addnstr(stdscr, height - 2, 2, 'Type a number and press Enter. 0 goes back.', width - 4, _color_attr('muted'))
+        stdscr.refresh()
+        choice_text = _prompt(stdscr, 'Choice')
+        if choice_text in {'0', '00'} or choice_text.lower() in {'q', 'quit', 'exit', 'b', 'back'}:
+            return {'action': 'back'}
+        if choice_text == '1':
+            _view_payload(stdscr, payloads)
+            message = ''
+        elif choice_text == '2':
+            message = _add_payload(stdscr)
+        elif choice_text == '3':
+            message = _delete_payload(stdscr, payloads)
+        else:
+            message = 'ERROR: Invalid choice'
+
+
+def _add_payload(stdscr):
+    name = _prompt(stdscr, 'Payload name')
+    if name in {'0', '00'} or name.lower() in {'b', 'back'}:
+        return ''
+    lines_text = _prompt(stdscr, 'Entries separated by comma')
+    if lines_text in {'0', '00'} or lines_text.lower() in {'b', 'back'}:
+        return ''
+    entries = [entry.strip() for entry in lines_text.split(',') if entry.strip()]
+    try:
+        path = WordlistManager.save_wordlist(name, entries)
+    except ValueError as exc:
+        return f'ERROR: {exc}'
+    return f'Saved payload: {path.stem}'
+
+
+def _delete_payload(stdscr, payloads):
+    selected = _choose_payload_index(stdscr, payloads, 'DELETE PAYLOAD')
+    if selected is None:
+        return ''
+    payload = payloads[selected]
+    if not payload.get('user_path') and not payload.get('drop_path'):
+        return 'ERROR: Built-in payloads cannot be deleted'
+    if WordlistManager.delete_wordlist(str(payload['name'])):
+        return f'Deleted payload: {payload["name"]}'
+    return 'ERROR: Payload not found'
+
+
+def _view_payload(stdscr, payloads):
+    selected = _choose_payload_index(stdscr, payloads, 'VIEW PAYLOAD')
+    if selected is None:
+        return
+    payload = payloads[selected]
+    entries = WordlistManager.get_wordlist(str(payload['name']))
+    offset = 0
+    while True:
+        height, width = stdscr.getmaxyx()
+        visible = max(1, height - 9)
+        stdscr.erase()
+        _draw_compact_logo(stdscr, 1, 2, width - 4)
+        _draw_section_title(stdscr, 4, 2, f'PAYLOAD {payload["name"]}', width - 4)
+        if not entries:
+            _safe_addnstr(stdscr, 7, 4, 'No entries', width - 8, _color_attr('muted'))
+        for index, entry in enumerate(entries[offset:offset + visible], start=1):
+            _draw_numbered_row(stdscr, 6 + index, 4, f'{offset + index:02}', entry, width - 8, _color_attr('text'))
+        _safe_addnstr(stdscr, height - 2, 2, 'n next, p previous, 0 back.', width - 4, _color_attr('muted'))
+        stdscr.refresh()
+        choice_text = _prompt(stdscr, 'Choice')
+        if choice_text in {'0', '00'} or choice_text.lower() in {'q', 'quit', 'exit', 'b', 'back'}:
+            return
+        if choice_text.lower() == 'n':
+            offset = min(max(0, len(entries) - visible), offset + visible)
+        elif choice_text.lower() == 'p':
+            offset = max(0, offset - visible)
+
+
+def _choose_payload_index(stdscr, payloads, title):
+    message = ''
+    while True:
+        height, width = stdscr.getmaxyx()
+        stdscr.erase()
+        _draw_compact_logo(stdscr, 1, 2, width - 4)
+        _draw_section_title(stdscr, 4, 2, title, width - 4)
+        if message:
+            _draw_message(stdscr, 5, 2, message, width - 4, is_error=True)
+        if not payloads:
+            _safe_addnstr(stdscr, 7, 4, 'No payloads available', width - 8, _color_attr('muted'))
+        for index, payload in enumerate(payloads[:max(0, height - 10)], start=1):
+            sources = ','.join(payload.get('sources', []))
+            line = f'{payload["name"]} -> {payload.get("count", 0)} entries [{sources}]'
+            _draw_numbered_row(stdscr, 6 + index, 4, f'{index:02}', line, width - 8, _color_attr('text'))
+        _safe_addnstr(stdscr, height - 2, 2, 'Type payload number. 0 goes back.', width - 4, _color_attr('muted'))
+        stdscr.refresh()
+        choice_text = _prompt(stdscr, 'Choice')
+        if choice_text in {'0', '00'} or choice_text.lower() in {'q', 'quit', 'exit', 'b', 'back'}:
+            return None
+        if choice_text.isdigit() and 1 <= int(choice_text) <= len(payloads):
+            return int(choice_text) - 1
+        message = 'Invalid payload number'
 
 
 def _run_profiles_viewer(stdscr, output_dir):
