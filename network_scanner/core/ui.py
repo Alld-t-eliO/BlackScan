@@ -10,6 +10,7 @@ import shutil
 import threading
 import time
 from pathlib import Path
+from urllib.parse import urlsplit
 
 RISK_ORDER = {'high': 0, 'medium': 1, 'low': 2, 'info': 3}
 PROFILES = ('quick', 'web', 'internal', 'full', 'stealth')
@@ -21,8 +22,10 @@ PROFILE_DESCRIPTIONS = {
     'stealth': 'low-noise services',
 }
 EXTERNAL_TOOLS = ('nmap', 'nuclei', 'httpx', 'subfinder', 'dnsx')
-MAIN_MENU = ('New scan', 'Open latest report', 'Open report path', 'List external tools', 'Quit')
+MAIN_MENU = ('New scan', 'Profiles', 'Open latest report', 'Open report path', 'List external tools', 'Quit')
 ANSI_RE = re.compile(r'\x1b\[[0-9;]*m')
+VIOLET_COLOR = 99
+PROFILE_STORE = Path.home() / '.blackscan' / 'profiles.json'
 LOGO = (
     r'__________.__                 __      _________                     ',
     r'\______   \  | _____    ____ |  | __ /   _____/ ____ _____    ____  ',
@@ -92,6 +95,64 @@ def build_scan_options(form):
         'intrusive_checks': bool(form['intrusive_checks']),
         'authorized': bool(form['authorized']),
     }
+
+
+def load_target_profiles(path=PROFILE_STORE):
+    path = Path(path)
+    if not path.exists():
+        return []
+    with open(path, encoding='utf-8') as handle:
+        data = json.load(handle)
+    profiles = data.get('profiles', []) if isinstance(data, dict) else []
+    return [normalize_target_profile(profile) for profile in profiles if isinstance(profile, dict)]
+
+
+def save_target_profiles(profiles, path=PROFILE_STORE):
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    normalized = [normalize_target_profile(profile) for profile in profiles]
+    with open(path, 'w', encoding='utf-8') as handle:
+        json.dump({'profiles': normalized}, handle, indent=2, ensure_ascii=False)
+
+
+def normalize_target_profile(profile):
+    return {
+        'name': str(profile.get('name', '')).strip(),
+        'ip': str(profile.get('ip', '')).strip(),
+        'url': str(profile.get('url', '')).strip(),
+    }
+
+
+def target_from_profile(profile):
+    normalized = normalize_target_profile(profile)
+    if normalized['ip']:
+        return normalized['ip']
+    if normalized['url']:
+        parsed = urlsplit(normalized['url'])
+        return parsed.hostname or normalized['url']
+    return ''
+
+
+def profile_display_target(profile):
+    normalized = normalize_target_profile(profile)
+    parts = []
+    if normalized['ip']:
+        parts.append(normalized['ip'])
+    if normalized['url']:
+        parts.append(normalized['url'])
+    return ' | '.join(parts) if parts else '<empty>'
+
+
+def apply_target_profile(form, profile):
+    target = target_from_profile(profile)
+    if target:
+        form['target'] = target
+    normalized = normalize_target_profile(profile)
+    if normalized['name']:
+        form['loaded_profile'] = normalized['name']
+    if normalize_target_profile(profile)['url'] and form['profile'] == 'quick':
+        form['profile'] = 'web'
+    return form
 
 
 def validate_scan_form(form):
@@ -285,7 +346,7 @@ def _run_main_menu(stdscr, output_dir):
                 break
             _draw_numbered_choice(stdscr, index, 4, menu_index + 1, item.upper(), width - 8)
 
-        _safe_addnstr(stdscr, height - 2, 2, 'Type a number and press Enter. 5 or q quits.', width - 4, _color_attr('muted'))
+        _safe_addnstr(stdscr, height - 2, 2, 'Type a number and press Enter. 6 or q quits.', width - 4, _color_attr('muted'))
         stdscr.refresh()
 
         choice_text = _prompt(stdscr, '> Choice')
@@ -300,6 +361,13 @@ def _run_main_menu(stdscr, output_dir):
             result = _run_scan_form(stdscr, output_dir)
             if result.get('action') != 'back':
                 return result
+            message = ''
+        elif choice == 'Profiles':
+            result = _run_profiles_viewer(stdscr, output_dir)
+            if result.get('action') == 'load_profile':
+                scan_result = _run_scan_form(stdscr, output_dir, result.get('profile'))
+                if scan_result.get('action') != 'back':
+                    return scan_result
             message = ''
         elif choice == 'Open latest report':
             try:
@@ -325,10 +393,12 @@ def _run_main_menu(stdscr, output_dir):
             return {'action': 'quit'}
 
 
-def _run_scan_form(stdscr, output_dir):
+def _run_scan_form(stdscr, output_dir, target_profile=None):
     _init_theme()
     form = default_scan_form(output_dir)
-    fields = list(form)
+    if target_profile:
+        apply_target_profile(form, target_profile)
+    fields = [field for field in form if field != 'loaded_profile']
     message = ''
 
     while True:
@@ -337,8 +407,10 @@ def _run_scan_form(stdscr, output_dir):
         _draw_compact_logo(stdscr, 1, 2, width - 4)
         _draw_section_title(stdscr, 4, 2, 'CONFIGURE SCAN', width - 4)
         _safe_addnstr(stdscr, 5, 2, '[type a field number to edit or toggle it]', width - 4, _color_attr('muted'))
+        if form.get('loaded_profile'):
+            _safe_addnstr(stdscr, 6, 2, f'[loaded profile: {form["loaded_profile"]}]', width - 4, _color_attr('accent'))
         if message:
-            _draw_message(stdscr, 6, 2, message, width - 4, is_error=True)
+            _draw_message(stdscr, 7, 2, message, width - 4, is_error=True)
 
         start_y = 8
         two_columns = width >= 72
@@ -358,9 +430,10 @@ def _run_scan_form(stdscr, output_dir):
             _safe_addnstr(stdscr, y, x, f'[{field_number:02}] {label:18} {value}', column_width, attr)
 
         command_y = min(height - 4, start_y + rows_per_column + 1)
-        _safe_addnstr(stdscr, command_y, 4, '[98] Start scan', width - 8, _color_attr('accent', curses.A_BOLD))
-        _safe_addnstr(stdscr, command_y + 1, 4, '[99] Cycle profile', width - 8, _color_attr('accent'))
-        _safe_addnstr(stdscr, command_y + 2, 4, '[00] Back', width - 8, _color_attr('muted'))
+        _safe_addnstr(stdscr, command_y, 4, '[97] Load saved profile', width - 8, _color_attr('accent'))
+        _safe_addnstr(stdscr, command_y + 1, 4, '[98] Start scan', width - 8, _color_attr('accent', curses.A_BOLD))
+        _safe_addnstr(stdscr, command_y + 2, 4, '[99] Cycle scan type', width - 8, _color_attr('accent'))
+        _safe_addnstr(stdscr, command_y + 3, 4, '[00] Back', width - 8, _color_attr('muted'))
         stdscr.refresh()
 
         choice_text = _prompt(stdscr, 'Choice')
@@ -368,6 +441,15 @@ def _run_scan_form(stdscr, output_dir):
             return {'action': 'quit'}
         if choice_text.lower() in {'b', 'back'} or choice_text in {'0', '00'}:
             return {'action': 'back'}
+        if choice_text == '97':
+            profiles = load_target_profiles()
+            loaded = _choose_target_profile(stdscr, profiles, 'LOAD PROFILE')
+            if loaded:
+                apply_target_profile(form, loaded)
+                message = ''
+            else:
+                message = ''
+            continue
         if choice_text == '99':
             form['profile'] = _next_profile(form['profile'])
             message = ''
@@ -401,6 +483,101 @@ def _open_report_inside_tui(stdscr, report_path):
     rows = flatten_services(report)
     summary = report_summary(report)
     _run_report_viewer(stdscr, report_path, report, rows, summary)
+
+
+def _run_profiles_viewer(stdscr, output_dir):
+    _init_theme()
+    message = ''
+    while True:
+        profiles = load_target_profiles()
+        height, width = stdscr.getmaxyx()
+        stdscr.erase()
+        _draw_compact_logo(stdscr, 1, 2, width - 4)
+        _draw_section_title(stdscr, 4, 2, 'PROFILES', width - 4)
+        if message:
+            _draw_message(stdscr, 5, 2, message, width - 4, is_error=message.startswith('ERROR:'))
+
+        y = 7
+        _draw_numbered_choice(stdscr, y, 4, 1, 'CREATE PROFILE', width - 8)
+        _draw_numbered_choice(stdscr, y + 1, 4, 2, 'LOAD PROFILE FOR SCAN', width - 8)
+        _draw_numbered_choice(stdscr, y + 2, 4, 3, 'DELETE PROFILE', width - 8)
+        _safe_addnstr(stdscr, y + 3, 4, '[0] Back', width - 8, _color_attr('header', curses.A_BOLD))
+
+        list_y = y + 5
+        _draw_section_title(stdscr, list_y, 2, 'SAVED PROFILES', width - 4)
+        if not profiles:
+            _safe_addnstr(stdscr, list_y + 1, 4, 'No saved profiles', width - 8, _color_attr('muted'))
+        for index, profile in enumerate(profiles[:max(0, height - list_y - 3)], start=1):
+            line = f'[{index:02}] {profile["name"]} -> {profile_display_target(profile)}'
+            _safe_addnstr(stdscr, list_y + index, 4, line, width - 8, _color_attr('text'))
+
+        _safe_addnstr(stdscr, height - 2, 2, 'Type a number and press Enter. 0 goes back.', width - 4, _color_attr('muted'))
+        stdscr.refresh()
+        choice_text = _prompt(stdscr, 'Choice')
+        if choice_text in {'0', '00'} or choice_text.lower() in {'q', 'quit', 'exit', 'b', 'back'}:
+            return {'action': 'back'}
+        if choice_text == '1':
+            message = _create_target_profile(stdscr)
+        elif choice_text == '2':
+            loaded = _choose_target_profile(stdscr, profiles, 'LOAD PROFILE')
+            if loaded:
+                return {'action': 'load_profile', 'profile': loaded}
+            message = ''
+        elif choice_text == '3':
+            deleted = _choose_target_profile(stdscr, profiles, 'DELETE PROFILE')
+            if deleted:
+                remaining = [profile for profile in profiles if profile['name'] != deleted['name']]
+                save_target_profiles(remaining)
+                message = f'Deleted profile: {deleted["name"]}'
+            else:
+                message = ''
+        else:
+            message = 'ERROR: Invalid choice'
+
+
+def _create_target_profile(stdscr):
+    name = _prompt(stdscr, 'Profile name')
+    if name in {'0', '00'} or name.lower() in {'b', 'back'}:
+        return ''
+    ip = _prompt(stdscr, 'IP, host, or CIDR')
+    if ip in {'0', '00'} or ip.lower() in {'b', 'back'}:
+        return ''
+    url = _prompt(stdscr, 'HTTPS URL')
+    if url in {'0', '00'} or url.lower() in {'b', 'back'}:
+        return ''
+    profile = normalize_target_profile({'name': name, 'ip': ip, 'url': url})
+    if not profile['name']:
+        return 'ERROR: Profile name is required'
+    if not profile['ip'] and not profile['url']:
+        return 'ERROR: Add an IP, host, CIDR, or HTTPS URL'
+    profiles = [item for item in load_target_profiles() if item['name'] != profile['name']]
+    profiles.append(profile)
+    save_target_profiles(sorted(profiles, key=lambda item: item['name'].lower()))
+    return f'Saved profile: {profile["name"]}'
+
+
+def _choose_target_profile(stdscr, profiles, title):
+    message = ''
+    while True:
+        height, width = stdscr.getmaxyx()
+        stdscr.erase()
+        _draw_compact_logo(stdscr, 1, 2, width - 4)
+        _draw_section_title(stdscr, 4, 2, title, width - 4)
+        if message:
+            _draw_message(stdscr, 5, 2, message, width - 4, is_error=True)
+        if not profiles:
+            _safe_addnstr(stdscr, 7, 4, 'No saved profiles', width - 8, _color_attr('muted'))
+        for index, profile in enumerate(profiles[:max(0, height - 10)], start=1):
+            line = f'[{index:02}] {profile["name"]} -> {profile_display_target(profile)}'
+            _safe_addnstr(stdscr, 6 + index, 4, line, width - 8, _color_attr('text'))
+        _safe_addnstr(stdscr, height - 2, 2, 'Type profile number. 0 goes back.', width - 4, _color_attr('muted'))
+        stdscr.refresh()
+        choice_text = _prompt(stdscr, 'Choice')
+        if choice_text in {'0', '00'} or choice_text.lower() in {'q', 'quit', 'exit', 'b', 'back'}:
+            return None
+        if choice_text.isdigit() and 1 <= int(choice_text) <= len(profiles):
+            return profiles[int(choice_text) - 1]
+        message = 'Invalid profile number'
 
 
 def _run_external_tools_viewer(stdscr):
@@ -695,15 +872,26 @@ def _init_theme():
     try:
         curses.start_color()
         curses.use_default_colors()
-        curses.init_pair(THEME['header'], curses.COLOR_MAGENTA, -1)
+        violet = _violet_color()
+        curses.init_pair(THEME['header'], violet, -1)
         curses.init_pair(THEME['accent'], curses.COLOR_CYAN, -1)
-        curses.init_pair(THEME['selection'], curses.COLOR_CYAN, curses.COLOR_MAGENTA)
+        curses.init_pair(THEME['selection'], curses.COLOR_CYAN, violet)
         curses.init_pair(THEME['error'], curses.COLOR_RED, -1)
-        curses.init_pair(THEME['muted'], curses.COLOR_MAGENTA, -1)
+        curses.init_pair(THEME['muted'], violet, -1)
         curses.init_pair(THEME['risk_medium'], curses.COLOR_CYAN, -1)
         curses.init_pair(THEME['text'], curses.COLOR_WHITE, -1)
     except curses.error:
         pass
+
+
+def _violet_color():
+    try:
+        if curses.COLORS > VIOLET_COLOR and curses.can_change_color():
+            curses.init_color(VIOLET_COLOR, 840, 200, 1000)
+            return VIOLET_COLOR
+    except curses.error:
+        pass
+    return curses.COLOR_MAGENTA
 
 
 def _color_attr(name, extra=0):
