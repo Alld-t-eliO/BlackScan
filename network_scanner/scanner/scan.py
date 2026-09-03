@@ -2,7 +2,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 
 from network_scanner import settings
-from network_scanner.modules import os_detection, ping_sweep, port_scanner, risk, service_scan, vulnerability
+from network_scanner.modules import external_tools, os_detection, ping_sweep, port_scanner, risk, service_scan, vulnerability
 from network_scanner.scanner.report import Colors, ReportMixin
 
 
@@ -22,6 +22,7 @@ class NetworkScanner(ReportMixin):
         host_workers=10,
         service_workers=32,
         proxy_url=None,
+        external_enrichment=False,
         progress_callback=None,
         log_callback=None,
     ):
@@ -38,6 +39,7 @@ class NetworkScanner(ReportMixin):
         self.host_workers = max(1, host_workers)
         self.service_workers = max(1, service_workers)
         self.proxy_url = proxy_url
+        self.external_enrichment = bool(external_enrichment or aggressive or self.profile == 'full')
         self.progress_callback = progress_callback
         self.log_callback = log_callback
         self.results = {
@@ -47,6 +49,7 @@ class NetworkScanner(ReportMixin):
             'os': {},
             'vulnerabilities': {},
             'risks': {},
+            'external_enrichment': {},
         }
         self.start_time = datetime.now(timezone.utc)
 
@@ -94,7 +97,7 @@ class NetworkScanner(ReportMixin):
                 if host_result:
                     scan_results[host] = host_result
                 completed_hosts += 1
-                self.emit_progress(10 + (completed_hosts * 75 / total_hosts), f'Scanned {completed_hosts}/{total_hosts} host(s)')
+                self.emit_progress(10 + (completed_hosts * 70 / total_hosts), f'Scanned {completed_hosts}/{total_hosts} host(s)')
 
         for host in self.results['hosts']:
             host_result = scan_results.get(host)
@@ -107,7 +110,19 @@ class NetworkScanner(ReportMixin):
             self.results['vulnerabilities'].update(host_result['vulnerabilities'])
             self.results['risks'].update(host_result['risks'])
 
-        self.emit_progress(90, 'Generating reports')
+        if self.external_enrichment:
+            self.emit_progress(84, 'External enrichment')
+            self.emit_log(f"\n{Colors.BLUE}[*] Step 3: external enrichment...{Colors.RESET}")
+            self.results['external_enrichment'] = external_tools.run_external_enrichment(
+                self.target,
+                self.results['hosts'],
+                self.results['services'],
+                self.timeout,
+                self.proxy_url,
+            )
+            self.emit_log(f"{Colors.GREEN}[+] External enrichment complete{Colors.RESET}")
+
+        self.emit_progress(94, 'Generating reports')
         reports = self.generate_report()
         self.emit_progress(100, 'Scan complete')
         return reports

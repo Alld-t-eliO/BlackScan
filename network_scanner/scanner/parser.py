@@ -67,6 +67,7 @@ def build_parser():
         help='Open the interactive TUI, or pass a JSON report path to open the report viewer directly',
     )
     parser.add_argument('--list-external-tools', action='store_true', help='List available external integrations')
+    parser.add_argument('--external-enrichment', action='store_true', help='Run available external tools and include their output in reports')
     parser.add_argument('--intrusive-checks', action='store_true', help='Enable checks that attempt application-level interactions')
     parser.add_argument('--authorized', action='store_true', help='Confirm that you are authorized to scan the target')
     return parser

@@ -33,10 +33,11 @@ It performs host discovery, TCP port scanning, lightweight service fingerprintin
 - Lightweight vulnerability checks for common exposure patterns.
 - Risk scoring per service.
 - Reports in JSON, HTML, CSV, and Markdown.
-- Interactive TUI for configuring scans and reviewing generated JSON reports.
+- Interactive TUI for configuring scans, saving reusable target profiles, managing payload wordlists, enabling external enrichment, and reviewing generated JSON reports.
 - Optional comparison against a previous JSON report.
 - Vulnerability trend analysis across multiple JSON reports.
-- Detection of external tools such as `nmap`, `nuclei`, `httpx`, `subfinder`, and `dnsx`.
+- Detection of external tools such as `nmap`, `nuclei`, `httpx`, `subfinder`, `dnsx`, `whois`, `dig`, `ffuf`, `feroxbuster`, `naabu`, `katana`, `sherlock`, and `recon-ng`.
+- Optional external enrichment during scans with structured output in JSON, HTML, CSV, and Markdown reports.
 
 ## Installation
 
@@ -53,7 +54,7 @@ source venv/bin/activate
 blackscan --help
 ```
 
-The installer creates a local `venv`, upgrades the build tools, installs BlackScan in editable mode, creates `reports/`, and verifies that the CLI can start.
+The installer creates a local `venv`, upgrades the build tools, installs BlackScan in editable mode, creates `reports/` and `network_scanner/payloads/payloads/`, and verifies that the CLI can start.
 
 For optional credential-audit dependencies:
 
@@ -71,6 +72,24 @@ If `python3` is not the Python executable you want to use:
 
 ```bash
 PYTHON=/path/to/python3 ./install.sh
+```
+
+## Update
+
+To get the latest version after cloning:
+
+```bash
+cd BlackScan
+git pull
+./install.sh
+source venv/bin/activate
+blackscan --help
+```
+
+If the virtual environment is already active, you can also refresh the editable install:
+
+```bash
+pip install -e .
 ```
 
 ## Usage
@@ -111,6 +130,14 @@ Enable intrusive checks only inside an authorized lab:
 blackscan -t 192.168.56.10 --authorized --profile internal --intrusive-checks
 ```
 
+Run available external enrichment tools and include their output in the final reports:
+
+```bash
+blackscan -t example.com --authorized --profile web --external-enrichment
+```
+
+External enrichment is automatic for `--profile full` and `-a` scans. For other profiles, enable it with `--external-enrichment` or the TUI `External Enrichment` field. It uses only tools already installed on the machine. `whois`, `dig`, `naabu`, `katana`, `ffuf`, and `feroxbuster` can run automatically when the scan context fits. `sherlock` runs only for domain-like targets. `recon-ng` is detected and reported, but not auto-executed because it is an interactive framework.
+
 Compare with an older JSON report:
 
 ```bash
@@ -135,7 +162,9 @@ Open the interactive terminal UI:
 blackscan --tui
 ```
 
-From the TUI you can start a new scan, confirm authorized scope, set target/profile/ports/proxy/options, list external tools, or open reports. The TUI uses numbered choices: type the number shown on screen and press Enter.
+From the TUI you can start a new scan, create, edit, delete, or load saved target profiles, view/add/delete payload wordlists, confirm authorized scope, set target/profile/ports/proxy/options, enable external enrichment, list external tools, or open reports. Saved target profiles can be loaded from the `Profiles` page or directly from the `New Scan` settings with `[97] Load saved profile`. The TUI uses numbered choices: type the number shown on screen and press Enter.
+
+You can drop payload wordlists directly into the repository `network_scanner/payloads/payloads/` folder. Text payload files appear in the TUI `Payloads` page using their filename without the extension as the payload name. Python files and hidden files are ignored.
 
 Open a specific JSON report directly in the report viewer:
 
@@ -167,8 +196,12 @@ Trend analysis writes:
 
 ## Project Layout
 
-- `network_scanner/scanner.py`: main CLI and report generation.
-- `network_scanner/core/ui.py`: interactive TUI for scan setup and JSON report review.
+- `network_scanner/scanner/main.py`: CLI entry point.
+- `network_scanner/scanner/scan.py`: scan orchestration and `NetworkScanner`.
+- `network_scanner/scanner/report.py`: JSON, HTML, CSV, and Markdown report generation.
+- `network_scanner/scanner/comparaison.py`: vulnerability trend report generation.
+- `network_scanner/scanner/parser.py`: CLI parser, port parsing, and proxy validation.
+- `network_scanner/core/ui.py`: interactive TUI for scan setup, target profiles, payload wordlists, and JSON report review.
 - `network_scanner/settings.py`: scan profile and port defaults.
 - `network_scanner/modules/ping_sweep.py`: host discovery.
 - `network_scanner/modules/port_scanner.py`: TCP port scanner.
@@ -177,6 +210,8 @@ Trend analysis writes:
 - `network_scanner/modules/risk.py`: service risk scoring.
 - `network_scanner/modules/report_diff.py`: report comparison and vulnerability trend analysis.
 - `network_scanner/modules/brute_force/`: guarded credential-audit helpers for lab use.
+- `network_scanner/payloads/base.py`: payload wordlist loading, user payload storage, and generated payload helpers.
+- `network_scanner/payloads/payloads/`: brute-force compatibility modules and drop-in folder for user-provided `.txt` payload wordlists.
 - `config/exploit_config.yaml`: compatibility config documenting disabled offensive workflows.
 - `tests/`: unit tests.
 

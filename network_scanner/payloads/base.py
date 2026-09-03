@@ -21,6 +21,7 @@ class WordlistManager:
     WORDLISTS_DIR = PAYLOAD_DIR / "wordlists"
     DROP_PAYLOADS_DIR = PAYLOAD_DIR / "payloads"
     USER_WORDLISTS_DIR = Path.home() / ".blackscan" / "payloads"
+    IGNORED_PAYLOAD_SUFFIXES = {'.py', '.pyc', '.pyo'}
 
     @classmethod
     def get_wordlist(cls, name: str) -> list[str]:
@@ -34,10 +35,24 @@ class WordlistManager:
     def wordlist_paths(cls, name: str) -> list[Path]:
         paths = []
         for directory in (cls.WORDLISTS_DIR, cls.DROP_PAYLOADS_DIR, cls.USER_WORDLISTS_DIR):
-            path = directory / f"{name}.txt"
-            if path.exists():
-                paths.append(path)
+            for path in cls.wordlist_files(directory):
+                if cls.wordlist_name(path) == name:
+                    paths.append(path)
         return paths
+
+    @classmethod
+    def wordlist_files(cls, directory: Path) -> list[Path]:
+        if not directory.exists():
+            return []
+        paths = []
+        for path in directory.iterdir():
+            if path.is_file() and not path.name.startswith('.') and path.suffix not in cls.IGNORED_PAYLOAD_SUFFIXES:
+                paths.append(path)
+        return sorted(paths, key=lambda item: cls.wordlist_name(item).lower())
+
+    @staticmethod
+    def wordlist_name(path: Path) -> str:
+        return path.stem if path.suffix else path.name
 
     @classmethod
     def list_wordlists(cls) -> list[dict[str, object]]:
@@ -47,10 +62,8 @@ class WordlistManager:
             ('drop', cls.DROP_PAYLOADS_DIR),
             ('user', cls.USER_WORDLISTS_DIR),
         ):
-            if not directory.exists():
-                continue
-            for path in sorted(directory.glob('*.txt')):
-                name = path.stem
+            for path in cls.wordlist_files(directory):
+                name = cls.wordlist_name(path)
                 payload = found.setdefault(
                     name,
                     {'name': name, 'sources': [], 'count': 0, 'user_path': None, 'drop_path': None},
@@ -88,8 +101,9 @@ class WordlistManager:
         if not safe_name:
             return False
         for directory in (cls.USER_WORDLISTS_DIR, cls.DROP_PAYLOADS_DIR):
-            path = directory / f'{safe_name}.txt'
-            if path.exists():
+            for path in cls.wordlist_files(directory):
+                if cls.safe_wordlist_name(cls.wordlist_name(path)) != safe_name:
+                    continue
                 path.unlink()
                 return True
         return False

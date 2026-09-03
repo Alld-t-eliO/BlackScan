@@ -23,7 +23,7 @@ PROFILE_DESCRIPTIONS = {
     'full': 'extended tcp range',
     'stealth': 'low-noise services',
 }
-EXTERNAL_TOOLS = ('nmap', 'nuclei', 'httpx', 'subfinder', 'dnsx')
+EXTERNAL_TOOLS = ('nmap', 'nuclei', 'httpx', 'subfinder', 'dnsx', 'whois', 'dig', 'ffuf', 'feroxbuster', 'naabu', 'katana', 'sherlock', 'recon-ng')
 MAIN_MENU = ('New scan', 'Profiles', 'Payloads', 'Open latest report', 'Open report path', 'List external tools', 'Quit')
 ANSI_RE = re.compile(r'\x1b\[[0-9;]*m')
 VIOLET_COLOR = 99
@@ -77,24 +77,26 @@ def default_scan_form(output_dir='reports'):
         'host_workers': '10',
         'service_workers': '32',
         'intrusive_checks': False,
+        'external_enrichment': False,
         'authorized': False,
     }
 
 
 def build_scan_options(form):
     return {
-        'target': form['target'].strip(),
+        'target': clean_input(form['target']).strip(),
         'profile': form['profile'],
-        'ports': form['ports'].strip() or None,
-        'timeout': int(form['timeout']),
-        'threads': int(form['threads']),
-        'output_dir': form['output_dir'].strip() or 'reports',
-        'proxy': form['proxy'].strip() or None,
-        'compare_report': form['compare_report'].strip() or None,
-        'max_hosts': int(form['max_hosts']),
-        'host_workers': int(form['host_workers']),
-        'service_workers': int(form['service_workers']),
+        'ports': clean_input(form['ports']).strip() or None,
+        'timeout': int(clean_input(form['timeout'])),
+        'threads': int(clean_input(form['threads'])),
+        'output_dir': clean_input(form['output_dir']).strip() or 'reports',
+        'proxy': clean_input(form['proxy']).strip() or None,
+        'compare_report': clean_input(form['compare_report']).strip() or None,
+        'max_hosts': int(clean_input(form['max_hosts'])),
+        'host_workers': int(clean_input(form['host_workers'])),
+        'service_workers': int(clean_input(form['service_workers'])),
         'intrusive_checks': bool(form['intrusive_checks']),
+        'external_enrichment': bool(form['external_enrichment'] or form['profile'] == 'full'),
         'authorized': bool(form['authorized']),
     }
 
@@ -172,17 +174,23 @@ def validate_target_profile(profile):
 
 def validate_scan_form(form):
     errors = []
-    if not form['target'].strip():
+    if not clean_input(form['target']).strip():
         errors.append('Target is required')
     if not form['authorized']:
         errors.append('Confirm authorized scope before scanning')
     for field in ('timeout', 'threads', 'max_hosts', 'host_workers', 'service_workers'):
         try:
-            if int(form[field]) < 1:
+            if int(clean_input(form[field])) < 1:
                 errors.append(f'{field} must be >= 1')
         except ValueError:
             errors.append(f'{field} must be a number')
     return errors
+
+
+def clean_input(value):
+    if value is None:
+        return ''
+    return ''.join(char for char in str(value).replace('\x00', '') if char == '\n' or char == '\t' or ord(char) >= 32)
 
 
 def find_latest_report(report_dir='reports'):
@@ -836,6 +844,7 @@ def _run_scan_session(stdscr, options):
                 options['host_workers'],
                 options['service_workers'],
                 proxy_url,
+                options['external_enrichment'],
                 progress_callback=on_progress,
                 log_callback=on_log,
             )
@@ -969,7 +978,7 @@ def _prompt(stdscr, label, current=''):
     finally:
         curses.noecho()
         curses.curs_set(0)
-    value = raw.decode(errors='ignore').strip()
+    value = clean_input(raw.decode(errors='ignore')).strip()
     return value if value else current
 
 

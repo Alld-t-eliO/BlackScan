@@ -51,6 +51,7 @@ def main():
             args.host_workers = options['host_workers']
             args.service_workers = options['service_workers']
             args.intrusive_checks = options['intrusive_checks']
+            args.external_enrichment = options['external_enrichment']
             args.authorized = options['authorized']
             args.aggressive = False
             args.trend = None
@@ -99,6 +100,7 @@ def main():
         args.host_workers,
         args.service_workers,
         proxy_url,
+        args.external_enrichment,
     )
 
     try:

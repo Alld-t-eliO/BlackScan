@@ -46,6 +46,7 @@ class ReportMixin:
                 'host_workers': self.host_workers,
                 'service_workers': self.service_workers,
                 'intrusive_checks': self.intrusive_checks,
+                'external_enrichment_enabled': getattr(self, 'external_enrichment', False),
                 'proxy': mask_proxy_url(self.proxy_url),
                 'ports': self.ports,
                 'external_tools': external_tools.detect_external_tools(),
@@ -86,6 +87,7 @@ class ReportMixin:
                     'technologies': '; '.join(http.get('technologies', [])),
                     'favicon_hash': http.get('favicon_hash', ''),
                     'vulnerabilities': '; '.join(vuln.get('name', 'unknown') for vuln in vulns),
+                    'external_enrichment': 'enabled' if results.get('external_enrichment') else 'disabled',
                 })
 
         with open(filename, 'w', newline='', encoding='utf-8') as f:
@@ -101,6 +103,7 @@ class ReportMixin:
                     'technologies',
                     'favicon_hash',
                     'vulnerabilities',
+                    'external_enrichment',
                 ],
             )
             writer.writeheader()
@@ -192,6 +195,11 @@ class ReportMixin:
             parts.append('<h2>Comparison</h2>')
             parts.append(self.comparison_html(report['comparison']))
 
+        enrichment = result.get('external_enrichment')
+        if enrichment:
+            parts.append('<h2>External Enrichment</h2>')
+            parts.append(self.external_enrichment_html(enrichment))
+
         parts.append('</main></body></html>')
 
         with open(filename, 'w', encoding='utf-8') as f:
@@ -253,6 +261,11 @@ class ReportMixin:
             lines.extend(['', '## Comparison', ''])
             lines.extend(self.comparison_markdown(report['comparison']))
 
+        enrichment = result.get('external_enrichment')
+        if enrichment:
+            lines.extend(['', '## External Enrichment', ''])
+            lines.extend(self.external_enrichment_markdown(enrichment))
+
         with open(filename, 'w', encoding='utf-8') as f:
             f.write('\n'.join(lines))
         self.emit_log(f"{Colors.GREEN}[+] Markdown report: {filename}{Colors.RESET}")
@@ -272,6 +285,8 @@ class ReportMixin:
             self.emit_log(f"{Colors.RED}{total_vulns} potential vulnerability/vulnerabilities found{Colors.RESET}")
         else:
             self.emit_log(f"{Colors.GREEN}No major vulnerabilities detected{Colors.RESET}")
+        if self.results.get('external_enrichment'):
+            self.emit_log(f"{Colors.CYAN}External enrichment: enabled{Colors.RESET}")
         self.emit_log(f"{Colors.PURPLE}{'=' * 60}{Colors.RESET}\n")
 
     @staticmethod
@@ -373,6 +388,74 @@ class ReportMixin:
                 lines.append('<p>No changes</p>')
         lines.append('</section>')
         return '\n'.join(lines)
+
+    @staticmethod
+    def external_enrichment_markdown(enrichment):
+        lines = []
+        for section in ('domain', 'network', 'web', 'osint'):
+            values = enrichment.get(section, {})
+            lines.extend([f'### {section.title()}', ''])
+            if not values:
+                lines.extend(['- No data', ''])
+                continue
+            lines.extend(ReportMixin.external_value_markdown(values))
+            lines.append('')
+        return lines
+
+    @staticmethod
+    def external_value_markdown(value, prefix=''):
+        lines = []
+        if isinstance(value, dict) and {'status', 'executed'}.intersection(value):
+            label = value.get('status', 'unknown')
+            if value.get('reason'):
+                label = f"{label}: {value.get('reason')}"
+            lines.append(f"- {prefix or 'result'}: {label}")
+            output = value.get('output', '')
+            if output:
+                lines.extend(['', '```text', output[:4000], '```'])
+            return lines
+        if isinstance(value, dict):
+            for key, item in value.items():
+                item_prefix = f'{prefix}.{key}' if prefix else str(key)
+                lines.extend(ReportMixin.external_value_markdown(item, item_prefix))
+            return lines
+        if isinstance(value, list):
+            for item in value[:50]:
+                lines.append(f"- {prefix}: {item}")
+            return lines
+        lines.append(f"- {prefix or 'result'}: {value}")
+        return lines
+
+    @staticmethod
+    def external_enrichment_html(enrichment):
+        safe = html.escape
+        parts = ['<section class="host">']
+        for section in ('domain', 'network', 'web', 'osint'):
+            parts.append(f'<h3>{safe(section.title())}</h3>')
+            parts.append(ReportMixin.external_value_html(enrichment.get(section, {})))
+        parts.append('</section>')
+        return '\n'.join(parts)
+
+    @staticmethod
+    def external_value_html(value):
+        safe = html.escape
+        if isinstance(value, dict) and {'status', 'executed'}.intersection(value):
+            label = value.get('status', 'unknown')
+            if value.get('reason'):
+                label = f"{label}: {value.get('reason')}"
+            output = value.get('output', '')
+            html_parts = [f'<p><strong>Status:</strong> {safe(str(label))}</p>']
+            if output:
+                html_parts.append(f'<pre>{safe(output[:4000])}</pre>')
+            return '\n'.join(html_parts)
+        if isinstance(value, dict):
+            items = []
+            for key, item in value.items():
+                items.append(f'<details open><summary>{safe(str(key))}</summary>{ReportMixin.external_value_html(item)}</details>')
+            return '\n'.join(items) if items else '<p>No data</p>'
+        if isinstance(value, list):
+            return '<ul>' + ''.join(f'<li>{safe(str(item))}</li>' for item in value[:50]) + '</ul>'
+        return f'<p>{safe(str(value))}</p>'
 
     @staticmethod
     def print_banner():
