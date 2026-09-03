@@ -30,28 +30,37 @@ It performs host discovery, TCP port scanning, lightweight service fingerprintin
 
 ## Installation
 
-Python 3.10, 3.11, or 3.12 is the supported range declared by the project metadata.
+Python 3.10 or newer is required.
 
-For core scanner use:
+Recommended setup after cloning:
 
 ```bash
-python -m pip install -e .
+git clone <repository-url>
+cd BlackScan
+chmod +x install.sh
+./install.sh
+source venv/bin/activate
+blackscan --help
 ```
 
-For development and all optional credential-audit dependencies:
+The installer creates a local `venv`, upgrades the build tools, installs BlackScan in editable mode, creates `reports/`, and verifies that the CLI can start.
+
+For optional credential-audit dependencies:
 
 ```bash
-python -m pip install -r requirements.txt
+./install.sh --audit
 ```
 
-Optional extras are also available:
+For development and tests:
 
 ```bash
-python -m pip install -e ".[dev]"
-python -m pip install -e ".[audit]"
-python -m pip install -e ".[ssh]"
-python -m pip install -e ".[http]"
-python -m pip install -e ".[mysql]"
+./install.sh --dev
+```
+
+If `python3` is not the Python executable you want to use:
+
+```bash
+PYTHON=/path/to/python3 ./install.sh
 ```
 
 ## Usage
@@ -59,69 +68,75 @@ python -m pip install -e ".[mysql]"
 Show the CLI help:
 
 ```bash
-python -m network_scanner --help
+blackscan --help
 ```
 
 Run a small authorized scan:
 
 ```bash
-python -m network_scanner -t 192.168.56.0/24 --authorized --profile quick
+blackscan -t 192.168.56.0/24 --authorized --profile quick
 ```
 
 Scan selected ports:
 
 ```bash
-python -m network_scanner -t 192.168.56.10 --authorized --ports 22,80,443,8000-8010
+blackscan -t 192.168.56.10 --authorized --ports 22,80,443,8000-8010
 ```
 
 Run web-focused checks:
 
 ```bash
-python -m network_scanner -t 192.168.56.10 --authorized --profile web
+blackscan -t 192.168.56.10 --authorized --profile web
 ```
 
 Route HTTP/HTTPS fingerprinting through a proxy:
 
 ```bash
-python -m network_scanner -t 192.168.56.10 --authorized --profile web --proxy http://127.0.0.1:8080
+blackscan -t 192.168.56.10 --authorized --profile web --proxy http://127.0.0.1:8080
 ```
 
 Enable intrusive checks only inside an authorized lab:
 
 ```bash
-python -m network_scanner -t 192.168.56.10 --authorized --profile internal --intrusive-checks
+blackscan -t 192.168.56.10 --authorized --profile internal --intrusive-checks
 ```
 
 Compare with an older JSON report:
 
 ```bash
-python -m network_scanner -t 192.168.56.0/24 --authorized --compare reports/scan_report_previous.json
+blackscan -t 192.168.56.0/24 --authorized --compare reports/scan_report_previous.json
 ```
 
 Analyze vulnerability evolution across existing reports:
 
 ```bash
-python -m network_scanner --trend reports/scan_report_old.json reports/scan_report_new.json
+blackscan --trend reports/scan_report_old.json reports/scan_report_new.json
 ```
 
 List optional external tools detected on the machine:
 
 ```bash
-python -m network_scanner --list-external-tools
+blackscan --list-external-tools
 ```
 
 Open the interactive terminal UI:
 
 ```bash
-python -m network_scanner --tui
+blackscan --tui
 ```
 
-From the TUI you can start a new scan, confirm authorized scope, set target/profile/ports/proxy/options, list external tools, or open reports.
+From the TUI you can start a new scan, confirm authorized scope, set target/profile/ports/proxy/options, list external tools, or open reports. The TUI uses numbered choices: type the number shown on screen and press Enter.
 
 Open a specific JSON report directly in the report viewer:
 
 ```bash
-python -m network_scanner --tui reports/scan_report_20260902_173005.json
+blackscan --tui reports/scan_report_20260902_173005.json
+```
+
+You can also run the module directly without activating the environment:
+
+```bash
+venv/bin/python -m network_scanner --help
 ```
 
 ## Reports
@@ -160,13 +175,14 @@ Trend analysis writes:
 Run tests:
 
 ```bash
+source venv/bin/activate
 python -m unittest discover -s tests -v
 ```
 
 Run lint:
 
 ```bash
-python -m ruff check .
+ruff check .
 ```
 
 The repository CI runs both commands across Python 3.10, 3.11, and 3.12.
@@ -176,7 +192,27 @@ The repository CI runs both commands across Python 3.10, 3.11, and 3.12.
 For educational testing, use an isolated host-only or NAT VM network. Good test targets are intentionally vulnerable lab machines or small services you start yourself. Keep scans limited at first:
 
 ```bash
-python -m network_scanner -t 192.168.56.0/24 --authorized --profile quick --timeout 1
+blackscan -t 192.168.56.0/24 --authorized --profile quick --timeout 1
 ```
 
 Increase scope only after confirming the target range and VM network are correct.
+
+## Troubleshooting
+
+If `blackscan` is not found, activate the virtual environment:
+
+```bash
+source venv/bin/activate
+```
+
+If installation fails while downloading packages, check internet access and rerun:
+
+```bash
+./install.sh
+```
+
+If macOS blocks execution of the installer, restore the executable bit:
+
+```bash
+chmod +x install.sh
+```
