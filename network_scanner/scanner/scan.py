@@ -119,6 +119,7 @@ class NetworkScanner(ReportMixin):
                 self.results['services'],
                 self.timeout,
                 self.proxy_url,
+                self.emit_log,
             )
             self.emit_log(f"{Colors.GREEN}[+] External enrichment complete{Colors.RESET}")
 

@@ -102,7 +102,7 @@ def build_scan_options(form):
 
 
 def load_target_profiles(path=PROFILE_STORE):
-    path = Path(path)
+    path = Path(clean_input(path))
     if not path.exists():
         return []
     with open(path, encoding='utf-8') as handle:
@@ -112,7 +112,7 @@ def load_target_profiles(path=PROFILE_STORE):
 
 
 def save_target_profiles(profiles, path=PROFILE_STORE):
-    path = Path(path)
+    path = Path(clean_input(path))
     path.parent.mkdir(parents=True, exist_ok=True)
     normalized = [normalize_target_profile(profile) for profile in profiles]
     with open(path, 'w', encoding='utf-8') as handle:
@@ -121,9 +121,9 @@ def save_target_profiles(profiles, path=PROFILE_STORE):
 
 def normalize_target_profile(profile):
     return {
-        'name': str(profile.get('name', '')).strip(),
-        'ip': str(profile.get('ip', '')).strip(),
-        'url': str(profile.get('url', '')).strip(),
+        'name': clean_input(profile.get('name', '')).strip(),
+        'ip': clean_input(profile.get('ip', '')).strip(),
+        'url': clean_input(profile.get('url', '')).strip(),
     }
 
 
@@ -194,14 +194,14 @@ def clean_input(value):
 
 
 def find_latest_report(report_dir='reports'):
-    reports = sorted(Path(report_dir).glob('scan_report_*.json'), key=lambda path: path.stat().st_mtime, reverse=True)
+    reports = sorted(Path(clean_input(report_dir)).glob('scan_report_*.json'), key=lambda path: path.stat().st_mtime, reverse=True)
     if not reports:
         raise FileNotFoundError(f'no scan_report_*.json files found in {report_dir}')
     return str(reports[0])
 
 
 def report_inventory(report_dir='reports'):
-    reports = sorted(Path(report_dir).glob('scan_report_*.json'), key=lambda path: path.stat().st_mtime, reverse=True)
+    reports = sorted(Path(clean_input(report_dir)).glob('scan_report_*.json'), key=lambda path: path.stat().st_mtime, reverse=True)
     return {
         'count': len(reports),
         'latest': reports[0].name if reports else None,
@@ -229,7 +229,7 @@ def profile_status_lines(active_profile):
 
 
 def load_report(path):
-    with open(path, encoding='utf-8') as handle:
+    with open(clean_input(path), encoding='utf-8') as handle:
         return json.load(handle)
 
 
@@ -983,7 +983,7 @@ def _prompt(stdscr, label, current=''):
 
 
 def _draw_header(stdscr, report_path, summary, width):
-    title = f"BLACKSCAN // REPORT VIEWER // {Path(report_path).name}"
+    title = f"BLACKSCAN // REPORT VIEWER // {Path(clean_input(report_path)).name}"
     _safe_addnstr(stdscr, 0, 0, title, width, _color_attr('accent', curses.A_BOLD))
     _safe_addnstr(stdscr, 1, 0, SIGNATURE, width, _color_attr('header', curses.A_BOLD))
     meta = (
@@ -1170,10 +1170,11 @@ def _detail_line_attr(line):
 
 
 def _strip_ansi(value):
-    return ANSI_RE.sub('', value)
+    return clean_input(ANSI_RE.sub('', value))
 
 
 def _safe_addnstr(stdscr, y, x, text, max_width, attr=0):
+    text = clean_input(text)
     height, width = stdscr.getmaxyx()
     if y < 0 or y >= height or x < 0 or x >= width:
         return

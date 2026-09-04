@@ -392,6 +392,24 @@ class ReportMixin:
     @staticmethod
     def external_enrichment_markdown(enrichment):
         lines = []
+        summary = enrichment.get('summary', {})
+        pipeline = enrichment.get('pipeline', [])
+        if summary:
+            lines.extend(['### Summary', ''])
+            for key in ('domains', 'subdomains', 'dns_records', 'hosts', 'ports', 'urls', 'endpoints', 'paths', 'findings', 'technologies'):
+                values = summary.get(key, [])
+                if values:
+                    lines.append(f"- {key.replace('_', ' ').title()}: {len(values)}")
+                    lines.extend(f"  - `{item}`" for item in values[:25])
+            lines.append('')
+        if pipeline:
+            lines.extend(['### Pipeline', '', '| Tool | Status | Executed | Reason |', '| --- | --- | --- | --- |'])
+            for step in pipeline:
+                lines.append(
+                    f"| {step.get('tool', '')} | {step.get('status', '')} | "
+                    f"{'yes' if step.get('executed') else 'no'} | {step.get('reason', '')} |"
+                )
+            lines.append('')
         for section in ('domain', 'network', 'web', 'osint'):
             values = enrichment.get(section, {})
             lines.extend([f'### {section.title()}', ''])
@@ -430,6 +448,23 @@ class ReportMixin:
     def external_enrichment_html(enrichment):
         safe = html.escape
         parts = ['<section class="host">']
+        summary = enrichment.get('summary', {})
+        if summary:
+            parts.append('<h3>Summary</h3><div class="summary">')
+            for key in ('domains', 'subdomains', 'dns_records', 'hosts', 'ports', 'urls', 'endpoints', 'paths', 'findings', 'technologies'):
+                values = summary.get(key, [])
+                if values:
+                    parts.append(f'<div class="metric"><span>{safe(key.replace("_", " ").title())}</span><strong>{len(values)}</strong></div>')
+            parts.append('</div>')
+        pipeline = enrichment.get('pipeline', [])
+        if pipeline:
+            parts.append('<h3>Pipeline</h3><table><tr><th>Tool</th><th>Status</th><th>Executed</th><th>Reason</th></tr>')
+            for step in pipeline:
+                parts.append(
+                    f'<tr><td>{safe(str(step.get("tool", "")))}</td><td>{safe(str(step.get("status", "")))}</td>'
+                    f'<td>{safe("yes" if step.get("executed") else "no")}</td><td>{safe(str(step.get("reason", "")))}</td></tr>'
+                )
+            parts.append('</table>')
         for section in ('domain', 'network', 'web', 'osint'):
             parts.append(f'<h3>{safe(section.title())}</h3>')
             parts.append(ReportMixin.external_value_html(enrichment.get(section, {})))
