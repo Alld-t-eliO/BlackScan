@@ -29,7 +29,7 @@ class Check:
     def applies_to(self, port, service, allow_intrusive=False):
         if self.intrusive and not allow_intrusive:
             return False
-        return port in self.ports
+        return port in self.ports or bool(service.get('http', {}).get('status') and 80 in self.ports)
 
     def run(self, host, port, service):
         raise NotImplementedError

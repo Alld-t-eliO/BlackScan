@@ -6,6 +6,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 from urllib.parse import urlsplit
+from xml.etree import ElementTree
 
 SUPPORTED_TOOLS = (
     'nmap',
@@ -75,7 +76,7 @@ def get_tool_version(name):
     return ANSI_RE.sub('', output[0]).strip()[:160] if output else ''
 
 
-def run_external_enrichment(target, hosts, services, timeout=2, proxy_url=None, log_callback=None):
+def run_external_enrichment(target, hosts, services, timeout=2, proxy_url=None, log_callback=None, command_timeout=120):
     tools = detect_external_tools()
     result = {
         'enabled': True,
@@ -98,9 +99,10 @@ def run_external_enrichment(target, hosts, services, timeout=2, proxy_url=None, 
         'web': {},
         'osint': {},
         'notes': [],
+        'normalized_findings': [],
     }
     domain = extract_domain_target(target)
-    command_timeout = max(8, min(45, int(timeout) * 8))
+    command_timeout = max(1, int(command_timeout))
     seed_hosts = unique_values(hosts)
     web_targets = unique_values(extract_web_targets(services))
     domains = [domain] if domain else []
@@ -115,12 +117,16 @@ def run_external_enrichment(target, hosts, services, timeout=2, proxy_url=None, 
 
     dig_result = run_dig_pipeline(domain, tools, command_timeout, result, log_callback)
     result['domain']['dig'] = dig_result
+    for record in dig_result.values():
+        if isinstance(record, dict):
+            extend_unique(result['summary']['dns_records'], parse_line_values(record.get('output', '')))
 
     subfinder_result = run_step(result, 'subfinder', ['subfinder', '-d', domain, '-silent'], tools, command_timeout, log_callback, skip_reason='' if domain else 'target is not a domain name')
     result['domain']['subfinder'] = subfinder_result
     subdomains = parse_line_values(subfinder_result.get('output', '')) if subfinder_result.get('executed') else []
     extend_unique(result['summary']['subdomains'], subdomains)
-    extend_unique(domains, subdomains)
+    if subdomains:
+        result['notes'].append('Discovered subdomains are inventory only; scan them explicitly to expand the target scope.')
 
     dns_targets = unique_values(domains or [domain])
     dnsx_result = run_list_step(result, 'dnsx', dns_targets, ['dnsx', '-l', '{input}', '-silent', '-a', '-aaaa'], tools, command_timeout, log_callback)
@@ -136,8 +142,10 @@ def run_external_enrichment(target, hosts, services, timeout=2, proxy_url=None, 
     nmap_targets = unique_values(seed_hosts + [item.split(':', 1)[0] for item in ports if ':' in item])
     nmap_result = run_nmap_step(result, nmap_targets, tools, command_timeout, log_callback)
     result['network']['nmap'] = nmap_result
+    nmap_ports = parse_nmap_ports(nmap_result.get('output', ''))
+    extend_unique(result['summary']['ports'], nmap_ports)
 
-    httpx_targets = unique_values(web_targets + domains + seed_hosts + [item for item in nmap_targets if item])
+    httpx_targets = unique_values(web_targets + domains + seed_hosts + ports + nmap_ports)
     httpx_result = run_list_step(result, 'httpx', httpx_targets, ['httpx', '-l', '{input}', '-silent', '-json'], tools, command_timeout, log_callback, json_lines=True)
     result['web']['httpx'] = httpx_result
     httpx_urls = parse_httpx_urls(httpx_result)
@@ -161,9 +169,28 @@ def run_external_enrichment(target, hosts, services, timeout=2, proxy_url=None, 
     nuclei_result = run_list_step(result, 'nuclei', web_urls, ['nuclei', '-l', '{input}', '-jsonl', '-silent'], tools, command_timeout, log_callback, json_lines=True)
     result['web']['nuclei'] = nuclei_result
     extend_unique(result['summary']['findings'], parse_nuclei_findings(nuclei_result))
+    for item in nuclei_result.get('json') or []:
+        if not isinstance(item, dict):
+            continue
+        info = item.get('info') or {}
+        if not isinstance(info, dict):
+            continue
+        matched = item.get('matched-at') or item.get('host') or ''
+        parsed = urlsplit(matched)
+        if parsed.hostname not in {urlsplit(url).hostname for url in web_urls}:
+            continue
+        port = parsed.port or (443 if parsed.scheme == 'https' else 80)
+        severity = str(info.get('severity', 'info')).lower()
+        result['normalized_findings'].append({
+            'name': info.get('name') or item.get('template-id') or 'Nuclei finding',
+            'severity': severity if severity in {'info', 'low', 'medium', 'high', 'critical'} else 'info',
+            'target': f'{parsed.hostname}:{port}', 'source': 'nuclei',
+            'evidence': matched, 'template_id': item.get('template-id', ''),
+            'recommendation': 'Review the template evidence and apply the relevant service remediation.',
+        })
 
-    sherlock_target = domain or extract_username_target(target)
-    sherlock_result = run_step(result, 'sherlock', ['sherlock', sherlock_target, '--timeout', str(max(5, int(timeout)))], tools, command_timeout, log_callback, skip_reason='' if sherlock_target else 'target is not a domain or username-like value')
+    sherlock_result = skipped('sherlock', tools, 'username OSINT does not apply to an IP/domain scan')
+    append_pipeline(result, 'sherlock', sherlock_result)
     result['osint']['sherlock'] = sherlock_result
     result['osint']['recon-ng'] = skipped('recon-ng', tools, 'interactive framework; detected but not auto-executed')
     append_pipeline(result, 'recon-ng', result['osint']['recon-ng'])
@@ -219,6 +246,8 @@ def run_nmap_step(result, targets, tools, timeout, log_callback=None):
         append_pipeline(result, 'nmap', value)
         return value
     args = ['nmap', '-sV', '-Pn', '--top-ports', '100', '-oX', '-', *targets[:20]]
+    if len(targets) > 20:
+        result['notes'].append(f'Nmap limited to 20 of {len(targets)} targets.')
     return run_step(result, 'nmap', args, tools, timeout, log_callback)
 
 
@@ -229,6 +258,8 @@ def run_web_map(result, name, urls, tools, command_timeout, timeout, proxy_url, 
         append_pipeline(result, name, value)
         return {'status': value}
     wordlist = write_web_wordlist()
+    if len(urls) > 10:
+        result['notes'].append(f'{name} limited to 10 of {len(urls)} URLs.')
     try:
         for url in urls[:10]:
             if name == 'katana':
@@ -244,12 +275,12 @@ def run_web_map(result, name, urls, tools, command_timeout, timeout, proxy_url, 
 
 def run_ffuf(url, wordlist, tools, command_timeout, timeout, proxy_url=None, result=None, log_callback=None):
     target_url = url.rstrip('/') + '/FUZZ'
-    args = ['ffuf', '-u', target_url, '-w', wordlist, '-of', 'json', '-s', '-t', '10', '-timeout', str(max(3, int(timeout)))]
+    args = ['ffuf', '-u', target_url, '-w', wordlist, '-json', '-s', '-t', '10', '-timeout', str(max(3, int(timeout)))]
     if proxy_url:
         args.extend(['-x', proxy_url])
     if result is None:
-        return run_tool('ffuf', args, tools, command_timeout, json_output=True)
-    return run_json_step(result, 'ffuf', args, tools, command_timeout, log_callback, json_output=True)
+        return run_tool('ffuf', args, tools, command_timeout, json_lines=True)
+    return run_json_step(result, 'ffuf', args, tools, command_timeout, log_callback, json_lines=True)
 
 
 def run_feroxbuster(url, wordlist, tools, command_timeout, timeout, result=None, log_callback=None):
@@ -283,7 +314,9 @@ def run_tool(name, args, tools, timeout, json_output=False, json_lines=False):
             'executed': True,
             'status': 'timeout',
             'returncode': None,
-            'output': trim_output((exc.stdout or '') + '\n' + (exc.stderr or '')),
+            'output': trim_output(clean_output(exc.stdout or '') + '\n' + clean_output(exc.stderr or '')),
+            'json': parse_json_output(clean_output(exc.stdout or ''), json_lines) if json_output or json_lines else None,
+            'reason': f'command exceeded {timeout}s',
         }
     except (OSError, subprocess.SubprocessError) as exc:
         return {
@@ -303,6 +336,8 @@ def run_tool(name, args, tools, timeout, json_output=False, json_lines=False):
         'returncode': completed.returncode,
         'output': trim_output(output),
         'json': parsed if json_output or json_lines else None,
+        'stderr': trim_output(completed.stderr or ''),
+        'reason': trim_output(completed.stderr or '', 500) if completed.returncode else '',
     }
 
 
@@ -347,6 +382,8 @@ def clean_arg(value):
 
 
 def clean_output(value):
+    if isinstance(value, bytes):
+        value = value.decode('utf-8', errors='replace')
     return ''.join(char for char in str(value).replace('\x00', '') if char in {'\n', '\r', '\t'} or ord(char) >= 32)
 
 
@@ -386,14 +423,11 @@ def extend_unique(values, incoming):
 
 
 def write_temp_lines(values):
-    handle = tempfile.NamedTemporaryFile('w', encoding='utf-8', delete=False)
-    try:
+    with tempfile.NamedTemporaryFile('w', encoding='utf-8', delete=False) as handle:
         for value in unique_values(values):
             handle.write(value)
             handle.write('\n')
         return handle.name
-    finally:
-        handle.close()
 
 
 def parse_line_values(output):
@@ -454,10 +488,13 @@ def parse_katana_endpoints(result):
 def parse_ffuf_paths(result):
     values = []
     data = result.get('json')
-    entries = data.get('results', []) if isinstance(data, dict) else []
+    entries = data.get('results', []) if isinstance(data, dict) else data if isinstance(data, list) else []
     for item in entries:
         if isinstance(item, dict):
             append_unique(values, item.get('url', ''))
+            for nested in item.get('results', []):
+                if isinstance(nested, dict):
+                    append_unique(values, nested.get('url', ''))
     return values
 
 
@@ -544,10 +581,24 @@ def extract_web_targets(services):
 
 def write_web_wordlist():
     entries = ('admin', 'login', 'api', 'swagger', 'docs', 'backup', 'config', '.git', '.env')
-    handle = tempfile.NamedTemporaryFile('w', encoding='utf-8', delete=False)
-    try:
+    with tempfile.NamedTemporaryFile('w', encoding='utf-8', delete=False) as handle:
         handle.write('\n'.join(entries))
         handle.write('\n')
         return handle.name
-    finally:
-        handle.close()
+
+
+def parse_nmap_ports(output):
+    try:
+        root = ElementTree.fromstring(output)
+    except ElementTree.ParseError:
+        return []
+    ports = []
+    for host in root.findall('host'):
+        address = host.find('address')
+        if address is None:
+            continue
+        for port in host.findall('ports/port'):
+            state = port.find('state')
+            if state is not None and state.get('state') == 'open' and port.get('protocol') == 'tcp':
+                append_unique(ports, f"{address.get('addr')}:{port.get('portid')}")
+    return ports

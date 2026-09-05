@@ -6,8 +6,13 @@ import ssl
 import tempfile
 from html.parser import HTMLParser
 from urllib.error import HTTPError, URLError
-from urllib.parse import urljoin
-from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener, urlopen
+from urllib.parse import urljoin, urlsplit
+from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
+
+
+def web_url(host, port, scheme):
+    host = f'[{host}]' if ':' in host and not host.startswith('[') else host
+    return f'{scheme}://{host}:{port}/'
 
 COMMON_PORTS = {
     21: 'FTP',
@@ -71,23 +76,29 @@ def detect_service(ip, port, timeout=2, proxy_url=None):
         'banner': '',
         'http': {},
         'tls': {},
+        'errors': [],
     }
 
     if port in HTTP_PORTS or port in HTTPS_PORTS:
         service_info['http'] = detect_http(ip, port, timeout, proxy_url)
-        if service_info['http']:
+        if service_info['http'].get('error'):
+            service_info['errors'].append(service_info['http']['error'])
+        if service_info['http'].get('status'):
             service_info['name'] = 'HTTPS' if port in HTTPS_PORTS else 'HTTP'
             service_info['banner'] = service_info['http'].get('server', '')
 
     if port in HTTPS_PORTS:
         service_info['tls'] = detect_tls(ip, port, timeout)
 
+    # HTTP servers wait for a request, and TLS sockets wait for a handshake.
+    # A second passive connection adds only delay and cannot provide a banner.
+    if port in HTTP_PORTS | HTTPS_PORTS:
+        return service_info
+
     sock = None
 
     try:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(timeout)
-        sock.connect((ip, port))
+        sock = socket.create_connection((ip, port), timeout=timeout)
         if port in HTTP_PORTS and not service_info['http']:
             sock.sendall(b'HEAD / HTTP/1.0\r\n\r\n')
         banner = sock.recv(1024).decode('utf-8', errors='ignore')
@@ -109,12 +120,16 @@ def detect_service(ip, port, timeout=2, proxy_url=None):
         elif 'FTP' in service_info['banner']:
             service_info['name'] = 'FTP'
 
+    if not service_info['banner'] and port not in COMMON_PORTS:
+        http = detect_http(ip, port, timeout, proxy_url)
+        if http.get('status'):
+            service_info.update(name='HTTP', http=http, banner=http.get('server', ''))
     return service_info
 
 
 def detect_http(ip, port, timeout=2, proxy_url=None):
     scheme = 'https' if port in HTTPS_PORTS else 'http'
-    url = f'{scheme}://{ip}:{port}/'
+    url = web_url(ip, port, scheme)
     try:
         redirects = fetch_redirects(url, timeout, proxy_url=proxy_url)
         request = Request(url, headers={'User-Agent': 'BlackScan/1.0'})
@@ -128,15 +143,20 @@ def detect_http(ip, port, timeout=2, proxy_url=None):
             parser = TitleParser()
             parser.feed(body)
             headers = dict(response.headers.items())
+            normalized_headers = {key.lower(): value for key, value in headers.items()}
             cookies = parse_cookies(get_header_values(response.headers, 'Set-Cookie'))
             return {
                 'url': url,
                 'status': getattr(response, 'status', None) or getattr(response, 'code', 0),
-                'proxy': proxy_url or '',
+                'proxy': redact_proxy(proxy_url),
+                'final_url': response.geturl() if hasattr(response, 'geturl') else url,
                 'redirects': redirects,
-                'server': headers.get('Server', ''),
-                'powered_by': headers.get('X-Powered-By', ''),
+                'server': normalized_headers.get('server', ''),
+                'powered_by': normalized_headers.get('x-powered-by', ''),
                 'title': parser.title,
+                'directory_listing': 'index of /' in body.lower() and (
+                    'parent directory' in body.lower() or '<title>index of' in body.lower()
+                ),
                 'headers': headers,
                 'security_headers': summarize_security_headers(headers),
                 'cookies': cookies,
@@ -148,8 +168,22 @@ def detect_http(ip, port, timeout=2, proxy_url=None):
         finally:
             if response:
                 response.close()
-    except (OSError, URLError, ValueError, ssl.SSLError):
-        return {}
+    except (OSError, URLError, ValueError, ssl.SSLError) as exc:
+        return {'url': url, 'error': f'HTTP collection failed: {type(exc).__name__}'}
+
+
+def redact_proxy(value):
+    if not value:
+        return ''
+    parsed = urlsplit(value)
+    return parsed._replace(netloc='***:***@' + parsed.netloc.rsplit('@', 1)[1]).geturl() if '@' in parsed.netloc else value
+
+
+class ScopedRedirectHandler(HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if urlsplit(newurl).hostname != urlsplit(req.full_url).hostname:
+            return None
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
 class NoRedirectHandler(HTTPRedirectHandler):
@@ -158,20 +192,22 @@ class NoRedirectHandler(HTTPRedirectHandler):
 
 
 def open_url(request, timeout=2, proxy_url=None):
-    if not proxy_url:
-        return urlopen(request, timeout=timeout)
     opener = build_proxy_opener(proxy_url)
     return opener.open(request, timeout=timeout)
 
 
 def build_proxy_opener(proxy_url):
-    return build_opener(ProxyHandler({'http': proxy_url, 'https': proxy_url}))
+    return build_opener(ScopedRedirectHandler(), *http_handlers(proxy_url))
+
+
+def http_handlers(proxy_url=None):
+    # Explicit empty proxies prevent environment variables from changing the selected route.
+    handlers = [ProxyHandler({'http': proxy_url, 'https': proxy_url} if proxy_url else {})]
+    return handlers
 
 
 def build_no_redirect_opener(proxy_url=None):
-    handlers = [NoRedirectHandler()]
-    if proxy_url:
-        handlers.append(ProxyHandler({'http': proxy_url, 'https': proxy_url}))
+    handlers = [NoRedirectHandler(), *http_handlers(proxy_url)]
     return build_opener(*handlers)
 
 
@@ -183,17 +219,22 @@ def fetch_redirects(url, timeout=2, limit=5, proxy_url=None):
     for _ in range(limit):
         try:
             request = Request(current_url, headers={'User-Agent': 'BlackScan/1.0'})
-            opener.open(request, timeout=timeout)
+            with opener.open(request, timeout=timeout):
+                pass
             break
         except URLError as exc:
-            response = getattr(exc, 'file', None)
+            response = exc if isinstance(exc, HTTPError) else None
             code = getattr(exc, 'code', None)
             headers = getattr(response, 'headers', {}) if response else {}
             location = headers.get('Location') if headers else None
+            if response is not None:
+                response.close()
             if code not in {301, 302, 303, 307, 308} or not location:
                 break
             next_url = urljoin(current_url, location)
             redirects.append({'status': code, 'location': next_url})
+            if urlsplit(next_url).hostname != urlsplit(url).hostname:
+                break
             current_url = next_url
         except OSError:
             break
@@ -283,18 +324,43 @@ def probe_paths(base_url, paths, timeout=2, proxy_url=None):
             request = Request(url, headers={'User-Agent': 'BlackScan/1.0'})
             with opener.open(request, timeout=timeout) as response:
                 status = response.status
+                content_type = response.headers.get('Content-Type', '').lower()
+                # File exposure must have file-like evidence, not just a wildcard 200 page.
+                body = response.read(2048) if path in SENSITIVE_WEB_PATHS else b''
         except URLError as exc:
             status = getattr(exc, 'code', 0) or 0
+            body, content_type = b'', ''
+            if isinstance(exc, HTTPError):
+                exc.close()
         except OSError:
             status = 0
+            body, content_type = b'', ''
 
         if status:
             results.append({
                 'path': path,
                 'status': status,
                 'interesting': status not in {404, 410},
+                'confirmed_content': sensitive_content(path, body, content_type),
             })
     return results
+
+
+def sensitive_content(path, body, content_type):
+    if not body:
+        return False
+    if path == '/backup.zip':
+        return body.startswith(b'PK\x03\x04')
+    if path == '/backup.tar.gz':
+        return body.startswith(b'\x1f\x8b')
+    text = body.decode('utf-8', errors='ignore').lower()
+    if path == '/.git/':
+        return 'index of' in text and ('head' in text or 'objects/' in text)
+    if 'text/html' in content_type or '<html' in text or '<!doctype' in text:
+        return False
+    if path == '/.env':
+        return any('=' in line and not line.lstrip().startswith('#') for line in text.splitlines())
+    return path == '/config.php.bak' and '<?php' in text
 
 
 def detect_tls(ip, port, timeout=2):

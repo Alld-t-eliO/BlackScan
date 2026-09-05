@@ -2,7 +2,10 @@ def load_report(path):
     import json
 
     with open(path, encoding='utf-8') as handle:
-        return json.load(handle)
+        report = json.load(handle)
+    if not isinstance(report, dict) or not isinstance(report.get('results'), dict):
+        raise ValueError(f'{path}: expected a BlackScan JSON report with a results object')  # noqa: TRY004 -- invalid file format
+    return report
 
 
 def _host_ports(report):
@@ -33,6 +36,7 @@ def _report_label(report, index):
 
 
 def compare_reports(old_report, new_report):
+    validate_comparable(old_report, new_report)
     old_hosts = set(old_report.get('results', {}).get('hosts', []))
     new_hosts = set(new_report.get('results', {}).get('hosts', []))
     old_ports = _host_ports(old_report)
@@ -51,23 +55,30 @@ def compare_reports(old_report, new_report):
     old_vulns = _vuln_keys(old_report)
     new_vulns = _vuln_keys(new_report)
 
+    uncertain = new_report.get('results', {}).get('scan_status') in {'partial', 'no_hosts', 'running', 'interrupted'}
+    uncertain = uncertain or bool(new_report.get('results', {}).get('errors'))
     return {
+        'resolution_verified': not uncertain,
         'new_hosts': sorted(new_hosts - old_hosts),
-        'removed_hosts': sorted(old_hosts - new_hosts),
+        'removed_hosts': [] if uncertain else sorted(old_hosts - new_hosts),
         'added_ports': added_ports,
-        'removed_ports': removed_ports,
+        'removed_ports': {} if uncertain else removed_ports,
         'new_vulnerabilities': [
             {'target': target, 'name': name, 'severity': severity}
             for target, name, severity in sorted(new_vulns - old_vulns)
         ],
         'resolved_vulnerabilities': [
             {'target': target, 'name': name, 'severity': severity}
-            for target, name, severity in sorted(old_vulns - new_vulns)
+            for target, name, severity in sorted(old_vulns - new_vulns) if not uncertain
         ],
     }
 
 
 def analyze_vulnerability_trends(reports):
+    for report in reports:
+        validate_comparable(reports[0], report)
+        if report.get('results', {}).get('scan_status') in {'partial', 'no_hosts', 'running', 'interrupted'} or report.get('results', {}).get('errors'):
+            raise ValueError('trend analysis requires complete scans; incomplete results cannot establish resolution')
     ordered_reports = sorted(enumerate(reports), key=lambda item: (_scan_time(item[1]), item[0]))
     snapshots = []
     previous_keys = set()
@@ -142,3 +153,11 @@ def _format_vuln_keys(keys):
         {'target': target, 'name': name, 'severity': severity}
         for target, name, severity in sorted(keys)
     ]
+
+
+def validate_comparable(old_report, new_report):
+    old = old_report.get('scan_info', {})
+    new = new_report.get('scan_info', {})
+    for key in ('target', 'profile', 'ports', 'intrusive_checks', 'external_enrichment_enabled', 'checks_enabled'):
+        if key in old and key in new and old[key] != new[key]:
+            raise ValueError(f'reports have different {key}; compare scans with matching scope and checks')

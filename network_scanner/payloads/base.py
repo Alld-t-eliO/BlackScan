@@ -21,7 +21,7 @@ class WordlistManager:
     WORDLISTS_DIR = PAYLOAD_DIR / "wordlists"
     DROP_PAYLOADS_DIR = PAYLOAD_DIR / "payloads"
     USER_WORDLISTS_DIR = Path.home() / ".blackscan" / "payloads"
-    IGNORED_PAYLOAD_SUFFIXES = {'.py', '.pyc', '.pyo'}
+    IGNORED_PAYLOAD_SUFFIXES = frozenset({'.py', '.pyc', '.pyo'})
 
     @classmethod
     def get_wordlist(cls, name: str) -> list[str]:

@@ -26,17 +26,22 @@ async def scan_ports_async(ip, ports, concurrency=100, timeout=2):
             if await scan_port_async(ip, port, timeout):
                 open_ports.append(port)
 
-    await asyncio.gather(*(bounded_scan(port) for port in ports))
+    # Only create a bounded batch of tasks, even for a 65535-port scan.
+    ports = iter(ports)
+
+    async def worker():
+        for port in ports:
+            await bounded_scan(port)
+
+    await asyncio.gather(*(worker() for _ in range(max(1, concurrency))))
     return sorted(open_ports)
 
 
 def scan_port(ip, port, timeout=2):
     sock = None
     try:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(timeout)
-        result = sock.connect_ex((ip, port))
-        return result == 0
+        sock = socket.create_connection((ip, port), timeout=timeout)
+        return True
     except OSError:
         return False
     finally:
@@ -59,7 +64,7 @@ def scan_ports(ip, ports, threads=100, timeout=2):
         nonlocal result, error
         try:
             result = asyncio.run(scan_ports_async(ip, ports, threads, timeout))
-        except RuntimeError as exc:
+        except Exception as exc:  # noqa: BLE001 -- propagate worker failure to the caller
             error = exc
 
     thread = threading.Thread(target=runner)

@@ -53,6 +53,9 @@ def main():
             args.intrusive_checks = options['intrusive_checks']
             args.external_enrichment = options['external_enrichment']
             args.authorized = options['authorized']
+            args.skip_discovery = options.get('skip_discovery', False)
+            args.no_external_enrichment = options.get('no_external_enrichment', False)
+            args.external_timeout = options.get('external_timeout', 120)
             args.aggressive = False
             args.trend = None
         else:
@@ -86,28 +89,36 @@ def main():
     except ValueError as exc:
         parser.error(str(exc))
 
-    scanner = NetworkScanner(
-        args.target,
-        args.threads,
-        args.timeout,
-        args.aggressive,
-        ports,
-        args.output_dir,
-        args.profile,
-        args.max_hosts,
-        args.compare,
-        args.intrusive_checks,
-        args.host_workers,
-        args.service_workers,
-        proxy_url,
-        args.external_enrichment,
-    )
+    try:
+        scanner = NetworkScanner(
+            args.target,
+            args.threads,
+            args.timeout,
+            args.aggressive,
+            ports,
+            args.output_dir,
+            args.profile,
+            args.max_hosts,
+            args.compare,
+            args.intrusive_checks,
+            args.host_workers,
+            args.service_workers,
+            proxy_url,
+            args.external_enrichment,
+            skip_discovery=args.skip_discovery,
+            no_external_enrichment=args.no_external_enrichment,
+            external_timeout=args.external_timeout,
+        )
+    except ValueError as exc:
+        parser.error(str(exc))
 
     try:
         scanner.scan_network()
+        if scanner.results.get("scan_status") in {"partial", "no_hosts"}:
+            sys.exit(2)
     except KeyboardInterrupt:
         print("\n[!] Scan interrupted by the user")
-        sys.exit(0)
+        sys.exit(130)
     except (OSError, RuntimeError, ValueError) as exc:
         print(f"[!] Error: {exc}")
         sys.exit(1)

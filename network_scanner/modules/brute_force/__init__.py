@@ -5,8 +5,8 @@ from network_scanner.payloads.payloads import (
     FTPBruteForce,
     HTTPBasicBruteForce,
     MySQLBruteForce,
-    SSHBruteForce,
     SafetyError,
+    SSHBruteForce,
 )
 
 __all__ = [

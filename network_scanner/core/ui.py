@@ -14,7 +14,7 @@ from urllib.parse import urlsplit
 
 from network_scanner.payloads import WordlistManager
 
-RISK_ORDER = {'high': 0, 'medium': 1, 'low': 2, 'info': 3}
+RISK_ORDER = {'critical': -1, 'high': 0, 'medium': 1, 'low': 2, 'info': 3}
 PROFILES = ('quick', 'web', 'internal', 'full', 'stealth')
 PROFILE_DESCRIPTIONS = {
     'quick': 'common services',
@@ -45,6 +45,7 @@ THEME = {
     'muted': 5,
     'text': 7,
     'risk_high': 4,
+    'risk_critical': 4,
     'risk_medium': 6,
     'risk_low': 2,
     'risk_info': 5,
@@ -60,6 +61,7 @@ EDITABLE_FIELDS = {
     'max_hosts',
     'host_workers',
     'service_workers',
+    'external_timeout',
 }
 
 
@@ -79,6 +81,9 @@ def default_scan_form(output_dir='reports'):
         'intrusive_checks': False,
         'external_enrichment': False,
         'authorized': False,
+        'skip_discovery': False,
+        'no_external_enrichment': False,
+        'external_timeout': '120',
     }
 
 
@@ -98,6 +103,9 @@ def build_scan_options(form):
         'intrusive_checks': bool(form['intrusive_checks']),
         'external_enrichment': bool(form['external_enrichment'] or form['profile'] == 'full'),
         'authorized': bool(form['authorized']),
+        'skip_discovery': bool(form.get('skip_discovery')),
+        'no_external_enrichment': bool(form.get('no_external_enrichment')),
+        'external_timeout': int(form.get('external_timeout', '120')),
     }
 
 
@@ -173,6 +181,8 @@ def validate_target_profile(profile):
 
 
 def validate_scan_form(form):
+    from network_scanner.scanner.parser import parse_ports, validate_proxy_url, validate_target
+
     errors = []
     if not clean_input(form['target']).strip():
         errors.append('Target is required')
@@ -184,6 +194,15 @@ def validate_scan_form(form):
                 errors.append(f'{field} must be >= 1')
         except ValueError:
             errors.append(f'{field} must be a number')
+    try:
+        validate_target(form['target'])
+        validate_proxy_url(form.get('proxy'))
+        if form.get('ports'):
+            parse_ports(form['ports'])
+        if int(form.get('external_timeout', '120')) < 1:
+            errors.append('external_timeout must be >= 1')
+    except ValueError as exc:
+        errors.append(str(exc))
     return errors
 
 
@@ -847,10 +866,13 @@ def _run_scan_session(stdscr, options):
                 options['external_enrichment'],
                 progress_callback=on_progress,
                 log_callback=on_log,
+                skip_discovery=options.get('skip_discovery', False),
+                no_external_enrichment=options.get('no_external_enrichment', False),
+                external_timeout=options.get('external_timeout', 120),
             )
             result['reports'] = scanner.scan_network()
             events.put(('done', None, None))
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 -- report worker errors to the foreground UI
             events.put(('error', str(exc), None))
 
     thread = threading.Thread(target=worker, daemon=True)
@@ -1162,7 +1184,7 @@ def _risk_attr(risk):
 
 def _detail_line_attr(line):
     normalized = line.lower()
-    if normalized.startswith('- high') or normalized.startswith('risk: high'):
+    if normalized.startswith(('- high', 'risk: high', '- critical', 'risk: critical')):
         return _color_attr('error', curses.A_BOLD)
     if normalized.endswith(':'):
         return _color_attr('accent', curses.A_BOLD)

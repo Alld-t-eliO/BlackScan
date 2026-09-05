@@ -1,9 +1,8 @@
+import ftplib
 import socket
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from typing import ClassVar
-from urllib.error import URLError
-from urllib.request import Request, urlopen
 
 from network_scanner.checks.base import Check, Finding
 
@@ -16,43 +15,25 @@ class FTPAnonymousLogin(Check):
     recommendation = 'Disable anonymous FTP or restrict it to a dedicated read-only directory.'
 
     def run(self, host, port, service):
-        sock = None
         try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(2)
-            sock.connect((host, port))
-            sock.sendall(b'USER anonymous\r\n')
-            response = sock.recv(1024).decode(errors='ignore')
-            if '331' in response:
-                sock.sendall(b'PASS anonymous\r\n')
-                response = sock.recv(1024).decode(errors='ignore')
-                if '230' in response:
-                    return self.finding(host, port, service.get('banner', 'anonymous login accepted'))
-        except OSError:
+            with ftplib.FTP() as ftp:
+                ftp.connect(host, port, timeout=service.get('check_timeout', 2))
+                ftp.login('anonymous', 'anonymous')
+                return self.finding(host, port, 'anonymous login accepted')
+        except ftplib.all_errors:
             return None
-        finally:
-            if sock:
-                sock.close()
-        return None
 
 
 class DirectoryListing(Check):
     name = 'Directory Listing'
-    ports = (80, 443, 8080, 8443)
+    ports = (80, 443, 8000, 8080, 8443, 8888)
     severity = 'medium'
     recommendation = 'Disable directory listing unless the listing is intentional.'
 
     def run(self, host, port, service):
-        scheme = 'https' if port in (443, 8443) else 'http'
-        url = f'{scheme}://{host}:{port}/'
-        try:
-            request = Request(url, headers={'User-Agent': 'BlackScan/1.0'})
-            with urlopen(request, timeout=2) as response:
-                body = response.read(4096).decode('utf-8', errors='ignore').lower()
-            if 'index of /' in body and ('parent directory' in body or '<title>index of' in body):
-                return self.finding(host, port, url)
-        except (OSError, URLError, ValueError):
-            return None
+        http = service.get('http') or {}
+        if http.get('directory_listing'):
+            return self.finding(host, port, http.get('final_url') or http.get('url', ''))
         return None
 
 
@@ -67,6 +48,7 @@ class MySQLEmptyRootPassword(Check):
         try:
             import mysql.connector
         except ImportError:
+            service.setdefault('errors', []).append('MySQL check skipped: install BlackScan with the mysql or audit extra')
             return None
 
         try:
@@ -75,7 +57,7 @@ class MySQLEmptyRootPassword(Check):
                 port=port,
                 user='root',
                 password='',
-                connect_timeout=2,
+                connect_timeout=service.get('check_timeout', 2),
             )
             conn.close()
             return self.finding(host, port, 'root login accepted with an empty password')
@@ -93,9 +75,7 @@ class UnauthenticatedRedis(Check):
     def run(self, host, port, service):
         sock = None
         try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(2)
-            sock.connect((host, port))
+            sock = socket.create_connection((host, port), timeout=service.get('check_timeout', 2))
             sock.sendall(b'INFO\r\n')
             response = sock.recv(256).decode(errors='ignore')
             if response.startswith('$') or 'redis_version' in response:
@@ -110,7 +90,7 @@ class UnauthenticatedRedis(Check):
 
 class MissingHTTPSecurityHeaders(Check):
     name = 'Missing HTTP Security Headers'
-    ports = (80, 443, 8000, 8080, 8443)
+    ports = (80, 443, 8000, 8080, 8443, 8888)
     severity = 'low'
     recommendation = 'Add the missing security headers where appropriate for the application.'
 
@@ -140,7 +120,8 @@ class HTTPWithoutTLS(Check):
     recommendation = 'Expose sensitive applications over HTTPS and redirect HTTP to HTTPS.'
 
     def run(self, host, port, service):
-        if service.get('http'):
+        http = service.get('http') or {}
+        if http.get('status') and not http.get('final_url', '').startswith('https://'):
             return self.finding(host, port, service.get('http', {}).get('url', ''))
         return None
 
@@ -185,7 +166,7 @@ class TLSCertificateExpiry(Check):
 
 class SensitiveWebPathExposure(Check):
     name = 'Sensitive Web Path Exposed'
-    ports = (80, 443, 8000, 8080, 8443)
+    ports = (80, 443, 8000, 8080, 8443, 8888)
     severity = 'high'
     recommendation = 'Remove sensitive files from the web root and restrict access to backup or metadata paths.'
     sensitive_paths: ClassVar[dict[str, str]] = {
@@ -199,9 +180,23 @@ class SensitiveWebPathExposure(Check):
     def run(self, host, port, service):
         for item in service.get('http', {}).get('sensitive_paths', []):
             status = item.get('status', 0)
-            if 200 <= status < 300 and item.get('path') in self.sensitive_paths:
+            if 200 <= status < 300 and item.get('path') in self.sensitive_paths and item.get('confirmed_content'):
                 evidence = f"{item['path']} HTTP {item['status']} - {self.sensitive_paths[item['path']]}"
                 return self.finding(host, port, evidence)
+        return None
+
+
+class TLSVerificationFailure(Check):
+    name = 'TLS Certificate Verification Failed'
+    ports = (443, 8443)
+    severity = 'medium'
+    recommendation = 'Use the expected hostname and a certificate trusted by the scanning environment.'
+
+    def run(self, host, port, service):
+        tls = service.get('tls') or {}
+        verification = tls.get('verification') or {}
+        if tls.get('sha256_fingerprint') and verification.get('error'):
+            return self.finding(host, port, verification['error'])
         return None
 
 
@@ -214,4 +209,5 @@ BUILTIN_CHECKS = (
     HTTPWithoutTLS,
     TLSCertificateExpiry,
     SensitiveWebPathExposure,
+    TLSVerificationFailure,
 )

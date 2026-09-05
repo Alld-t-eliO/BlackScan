@@ -2,10 +2,48 @@ import csv
 import html
 import json
 import os
+import tempfile
 from datetime import datetime, timezone
 
 from network_scanner.modules import external_tools, report_diff
 from network_scanner.scanner.parser import mask_proxy_url
+
+
+def safe_cell(value):
+    text = str(value)
+    return "'" + text if text.lstrip().startswith(('=', '+', '-', '@')) else text
+
+
+def markdown_cell(value):
+    return html.escape(str(value)).replace('|', '&#124;').replace('\n', ' ').replace('\r', ' ')
+
+
+def sanitized(value):
+    if isinstance(value, dict):
+        output = {}
+        for key, item in value.items():
+            if str(key).lower() in {'set-cookie', 'authorization', 'proxy-authorization', 'cookie'}:
+                output[key] = '[redacted]'
+            elif key == 'proxy' and isinstance(item, str):
+                output[key] = mask_proxy_url(item)
+            else:
+                output[key] = sanitized(item)
+        return output
+    if isinstance(value, list):
+        return [sanitized(item) for item in value]
+    return value
+
+
+def write_json_atomic(path, value):
+    temporary = ''
+    try:
+        with tempfile.NamedTemporaryFile('w', encoding='utf-8', dir=os.path.dirname(path) or '.', delete=False) as handle:
+            temporary = handle.name
+            json.dump(value, handle, indent=2, ensure_ascii=False)
+        os.replace(temporary, path)
+    finally:
+        if temporary and os.path.exists(temporary):
+            os.unlink(temporary)
 
 
 class Colors:
@@ -25,7 +63,7 @@ class ReportMixin:
         self.emit_log(f"\n{Colors.BLUE}[*] Generating reports...{Colors.RESET}")
         os.makedirs(self.output_dir, exist_ok=True)
 
-        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
         report_filename = os.path.join(self.output_dir, f"scan_report_{timestamp}.json")
         html_filename = os.path.join(self.output_dir, f"scan_report_{timestamp}.html")
         csv_filename = os.path.join(self.output_dir, f"scan_report_{timestamp}.csv")
@@ -33,6 +71,7 @@ class ReportMixin:
         end_time = datetime.now(timezone.utc)
 
         report = {
+            'schema_version': 2,
             'scan_info': {
                 'target': self.target,
                 'start_time': self.start_time.isoformat(),
@@ -49,17 +88,26 @@ class ReportMixin:
                 'external_enrichment_enabled': getattr(self, 'external_enrichment', False),
                 'proxy': mask_proxy_url(self.proxy_url),
                 'ports': self.ports,
+                'status': self.results.get('scan_status', 'complete'),
+                'skip_discovery': self.skip_discovery,
+                'checks_enabled': self.aggressive or self.intrusive_checks,
                 'external_tools': external_tools.detect_external_tools(),
             },
             'results': self.results
         }
 
         if self.compare_report:
-            old_report = report_diff.load_report(self.compare_report)
-            report['comparison'] = report_diff.compare_reports(old_report, report)
+            try:
+                old_report = report_diff.load_report(self.compare_report)
+                report['comparison'] = report_diff.compare_reports(old_report, report)
+            except (OSError, ValueError, TypeError) as exc:
+                self.record_error('comparison', self.compare_report, exc)
+                self.results['scan_status'] = 'partial'
+                report['scan_info']['status'] = 'partial'
+                report['comparison_error'] = str(exc)
 
-        with open(report_filename, 'w', encoding='utf-8') as f:
-            json.dump(report, f, indent=2, ensure_ascii=False)
+        report = sanitized(report)
+        write_json_atomic(report_filename, report)
         self.emit_log(f"{Colors.GREEN}[+] JSON report: {report_filename}{Colors.RESET}")
 
         self.generate_html_report(report, html_filename)
@@ -107,7 +155,7 @@ class ReportMixin:
                 ],
             )
             writer.writeheader()
-            writer.writerows(rows)
+            writer.writerows({key: safe_cell(value) for key, value in row.items()} for row in rows)
         self.emit_log(f"{Colors.GREEN}[+] CSV report: {filename}{Colors.RESET}")
 
     def generate_html_report(self, report, filename):
@@ -136,12 +184,14 @@ class ReportMixin:
             f"<p><strong>Started:</strong> {safe(report['scan_info']['start_time'])}</p>",
             f"<p><strong>Duration:</strong> {safe(report['scan_info']['duration'])}</p>",
             f"<p><strong>Profile:</strong> {safe(report['scan_info'].get('profile', 'quick'))}</p>",
+            f"<p><strong>Status:</strong> {safe(report['scan_info'].get('status', 'unknown'))}</p>",
             '<h2>Summary</h2>',
             '<section class="summary">',
             f"<div class=\"metric\"><span>Hosts</span><strong>{len(result['hosts'])}</strong></div>",
             f"<div class=\"metric\"><span>Open ports</span><strong>{total_ports}</strong></div>",
             f"<div class=\"metric\"><span>Vulnerabilities</span><strong>{total_vulns}</strong></div>",
             f"<div class=\"metric\"><span>High risk</span><strong>{risk_counts.get('high', 0)}</strong></div>",
+            f"<div class=\"metric\"><span>Critical risk</span><strong>{risk_counts.get('critical', 0)}</strong></div>",
             '</section>',
             '<h2>Details</h2>',
         ]
@@ -200,6 +250,12 @@ class ReportMixin:
             parts.append('<h2>External Enrichment</h2>')
             parts.append(self.external_enrichment_html(enrichment))
 
+        if result.get('errors'):
+            parts.append('<h2>Incomplete steps</h2><ul>')
+            for error in result['errors']:
+                parts.append(f"<li>{safe(error['stage'])}: {safe(error['target'])}: {safe(error['message'])}</li>")
+            parts.append('</ul>')
+
         parts.append('</main></body></html>')
 
         with open(filename, 'w', encoding='utf-8') as f:
@@ -215,6 +271,7 @@ class ReportMixin:
             f"- Started: `{report['scan_info']['start_time']}`",
             f"- Duration: `{report['scan_info']['duration']}`",
             f"- Profile: `{report['scan_info'].get('profile', 'quick')}`",
+            f"- Status: `{report['scan_info'].get('status', 'unknown')}`",
             '',
             '## Summary',
             '',
@@ -238,8 +295,8 @@ class ReportMixin:
                 if http:
                     http_label = f"{http.get('status', '')} {http.get('title', '')}".strip()
                 lines.append(
-                    f"| `{host}` | {port} | {service.get('name', 'unknown')} | "
-                    f"{http_label} | {risk_info.get('score', 'info')} | {technologies} |"
+                    f"| `{markdown_cell(host)}` | {port} | {markdown_cell(service.get('name', 'unknown'))} | "
+                    f"{markdown_cell(http_label)} | {risk_info.get('score', 'info')} | {markdown_cell(technologies)} |"
                 )
 
         lines.extend(['', '## Vulnerabilities', ''])
@@ -266,6 +323,11 @@ class ReportMixin:
             lines.extend(['', '## External Enrichment', ''])
             lines.extend(self.external_enrichment_markdown(enrichment))
 
+        if result.get('errors'):
+            lines.extend(['', '## Incomplete steps', ''])
+            for error in result['errors']:
+                lines.append(f"- {markdown_cell(error['stage'])}: {markdown_cell(error['target'])}: {markdown_cell(error['message'])}")
+
         with open(filename, 'w', encoding='utf-8') as f:
             f.write('\n'.join(lines))
         self.emit_log(f"{Colors.GREEN}[+] Markdown report: {filename}{Colors.RESET}")
@@ -279,19 +341,23 @@ class ReportMixin:
         self.emit_log(f"{Colors.PURPLE}{'=' * 60}{Colors.RESET}")
         self.emit_log(f"{Colors.WHITE}Hosts found: {len(self.results['hosts'])}{Colors.RESET}")
         self.emit_log(f"{Colors.WHITE}Open ports: {total_ports}{Colors.RESET}")
-        self.emit_log(f"{Colors.WHITE}Services identified: {sum(len(services) for services in self.results['services'].values())}{Colors.RESET}")
+        self.emit_log(f"{Colors.WHITE}Services recorded: {sum(len(services) for services in self.results['services'].values())}{Colors.RESET}")
         self.emit_log(f"{Colors.WHITE}High risks: {risk_counts.get('high', 0)}{Colors.RESET}")
+        self.emit_log(f"{Colors.WHITE}Critical risks: {risk_counts.get('critical', 0)}{Colors.RESET}")
         if total_vulns:
             self.emit_log(f"{Colors.RED}{total_vulns} potential vulnerability/vulnerabilities found{Colors.RESET}")
         else:
-            self.emit_log(f"{Colors.GREEN}No major vulnerabilities detected{Colors.RESET}")
+            self.emit_log(f"{Colors.WHITE}No findings from completed checks; this does not establish absence of vulnerabilities.{Colors.RESET}")
+        self.emit_log(f"Status: {self.results.get('scan_status', 'unknown')}")
+        if self.results.get('errors'):
+            self.emit_log(f"Incomplete steps: {len(self.results['errors'])}")
         if self.results.get('external_enrichment'):
             self.emit_log(f"{Colors.CYAN}External enrichment: enabled{Colors.RESET}")
         self.emit_log(f"{Colors.PURPLE}{'=' * 60}{Colors.RESET}\n")
 
     @staticmethod
     def count_risks(results):
-        counts = {'info': 0, 'low': 0, 'medium': 0, 'high': 0}
+        counts = {'info': 0, 'low': 0, 'medium': 0, 'high': 0, 'critical': 0}
         for risk_info in results.get('risks', {}).values():
             score = risk_info.get('score', 'info')
             counts[score] = counts.get(score, 0) + 1
@@ -392,6 +458,7 @@ class ReportMixin:
     @staticmethod
     def external_enrichment_markdown(enrichment):
         lines = []
+        lines.extend(f'- Note: {markdown_cell(note)}' for note in enrichment.get('notes', []))
         summary = enrichment.get('summary', {})
         pipeline = enrichment.get('pipeline', [])
         if summary:
@@ -448,6 +515,7 @@ class ReportMixin:
     def external_enrichment_html(enrichment):
         safe = html.escape
         parts = ['<section class="host">']
+        parts.extend(f'<p>{safe(str(note))}</p>' for note in enrichment.get('notes', []))
         summary = enrichment.get('summary', {})
         if summary:
             parts.append('<h3>Summary</h3><div class="summary">')

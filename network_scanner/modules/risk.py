@@ -1,4 +1,4 @@
-SEVERITY_ORDER = {'info': 0, 'low': 1, 'medium': 2, 'high': 3}
+SEVERITY_ORDER = {'info': 0, 'low': 1, 'medium': 2, 'high': 3, 'critical': 4}
 SENSITIVE_PORTS = {
     22: ('SSH exposed', 'medium'),
     23: ('Telnet exposed', 'high'),

@@ -4,6 +4,7 @@ import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from network_scanner.modules.port_scanner import scan_port
+from network_scanner.scanner.parser import validate_target
 
 TCP_DISCOVERY_PORTS = (80, 443, 22, 445, 3389)
 
@@ -29,11 +30,13 @@ def is_host_active(ip, timeout=2, tcp_ports=TCP_DISCOVERY_PORTS):
     return any(scan_port(ip, port, timeout) for port in tcp_ports)
 
 
-def sweep(target, threads=100, timeout=2, max_hosts=4096, tcp_ports=TCP_DISCOVERY_PORTS):
+def sweep(target, threads=100, timeout=2, max_hosts=4096, tcp_ports=TCP_DISCOVERY_PORTS,
+          skip_discovery=False, log_callback=print):
+    target = validate_target(target)
     try:
         network = ipaddress.ip_network(target, strict=False)
     except ValueError:
-        if is_host_active(target, timeout, tcp_ports):
+        if skip_discovery or is_host_active(target, timeout, tcp_ports):
             return [target]
         return []
 
@@ -42,14 +45,18 @@ def sweep(target, threads=100, timeout=2, max_hosts=4096, tcp_ports=TCP_DISCOVER
 
     if network.num_addresses == 1:
         address = str(network.network_address)
-        if is_host_active(address, timeout, tcp_ports):
-            print(f"[+] {address} is active")
+        if skip_discovery or is_host_active(address, timeout, tcp_ports):
+            log_callback(f"[+] {address} selected" if skip_discovery else f"[+] {address} is active")
             return [address]
         return []
     else:
         addresses = [str(ip) for ip in network.hosts()]
     if not addresses:
         return []
+    if len(addresses) > max_hosts:
+        raise ValueError('target range exceeds --max-hosts')
+    if skip_discovery:
+        return addresses
 
     results = []
     workers = min(max(1, threads), len(addresses))
@@ -63,6 +70,6 @@ def sweep(target, threads=100, timeout=2, max_hosts=4096, tcp_ports=TCP_DISCOVER
                 active = False
             if active:
                 results.append(ip)
-                print(f"[+] {ip} is active")
+                log_callback(f"[+] {ip} is active")
 
     return results
