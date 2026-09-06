@@ -108,8 +108,6 @@ class NetworkScanner(ReportMixin):
         self.emit_progress(1, 'Host discovery')
         self.emit_log(f"{Colors.BLUE}[*] Step 1: host discovery...{Colors.RESET}")
         discovery_ports = tuple(dict.fromkeys((*ping_sweep.TCP_DISCOVERY_PORTS, *self.ports)))
-        # Large ranges use a small representative probe set; --skip-discovery
-        # explicitly scans every address without relying on discovery.
         discovery_ports = discovery_ports[:32]
         hosts = ping_sweep.sweep(
             self.target, self.threads, self.timeout, self.max_hosts, discovery_ports,
@@ -137,7 +135,7 @@ class NetworkScanner(ReportMixin):
                 host = futures[future]
                 try:
                     host_result = future.result()
-                except Exception as exc:  # noqa: BLE001 -- one host must not discard the rest of a scan
+                except Exception as exc:
                     self.emit_log(f"{Colors.RED}[!] Failed to scan {host}: {exc}{Colors.RESET}")
                     self.record_error('host', host, exc)
                     self.results['host_status'][host] = 'error'
@@ -145,7 +143,6 @@ class NetworkScanner(ReportMixin):
                 self.results['host_status'][host] = 'complete'
                 if host_result:
                     scan_results[host] = host_result
-                    # Checkpoint each completed host before the next future can fail.
                     self.results['open_ports'][host] = host_result['open_ports']
                     self.results['services'][host] = host_result['services']
                     self.results['vulnerabilities'].update(host_result['vulnerabilities'])
@@ -177,7 +174,7 @@ class NetworkScanner(ReportMixin):
                 for step in self.results['external_enrichment'].get('pipeline', []):
                     if step.get('status') in {'error', 'timeout'}:
                         self.record_error('external', step['tool'], step.get('reason') or step['status'])
-            except Exception as exc:  # noqa: BLE001 -- preserve internal findings if an optional tool fails
+            except Exception as exc:
                 self.record_error('external', self.target, exc)
             self.emit_log(f"{Colors.GREEN}[+] External enrichment finished; consult individual step statuses{Colors.RESET}")
 
@@ -216,7 +213,7 @@ class NetworkScanner(ReportMixin):
                 port = futures[future]
                 try:
                     service, vulns, risk_info = future.result()
-                except Exception as exc:  # noqa: BLE001 -- retain the open port and record fingerprint failure
+                except Exception as exc:
                     self.emit_log(f"    {Colors.RED}[!] Failed to fingerprint {host}:{port}: {exc}{Colors.RESET}")
                     service = {'name': 'unknown', 'banner': '', 'http': {}, 'tls': {}}
                     vulns = []
@@ -263,3 +260,51 @@ class NetworkScanner(ReportMixin):
                 findings.append(finding)
             current = self.results['risks'].setdefault(target, {'score': 'info', 'factors': []})
             current['score'] = risk.max_severity([current['score'], finding['severity']])
+
+
+
+    async def run_exploit_phase(self):
+    
+        from network_scanner.payloads.exploits import (
+            SSHAuthBypass, SSHPrivilegeEscalation,
+            TomcatManagerExploit, WordPressExploit,
+            MySQLExploit, RedisExploit
+        )
+    
+        targets = []
+        for host, services in self.results['services'].items():
+            for port_str, service in services.items():
+                port = int(port_str)
+            
+                exploit_map = {
+                    'ssh': [SSHAuthBypass, SSHPrivilegeEscalation],
+                    'http': [TomcatManagerExploit, WordPressExploit],
+                    'mysql': [MySQLExploit],
+                    'redis': [RedisExploit],
+                }
+            
+                service_name = service.get('name', '').lower()
+                if service_name in exploit_map:
+                    targets.append({
+                        'host': host,
+                        'port': port,
+                        'service': service_name,
+                        'exploits': exploit_map[service_name]
+                    })
+    
+        results = []
+        for target in targets:
+            for exploit_class in target['exploits']:
+                exploit = exploit_class(target['host'], target['port'])
+                is_vuln, reason = await exploit.check()
+            
+                if is_vuln:
+                    result = await exploit.exploit()
+                    results.append(result)
+                
+                    if result.success:
+                        self.emit_log(f"[!] SUCCESS: {result.description}")
+                        if result.credentials:
+                            self.emit_log(f"    Credentials: {result.credentials}")
+    
+        return results

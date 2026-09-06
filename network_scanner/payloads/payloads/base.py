@@ -45,14 +45,14 @@ class BruteForceResult:
     duration: float = 0.0
     evidence: str = ''
 
-    def as_dict(self) -> dict[str, Any]:
+    def as_dict(self, include_secrets=False) -> dict[str, Any]:
         return {
             'success': self.success,
             'service': self.service,
             'target': self.target,
             'port': self.port,
             'username': self.credentials.username if self.credentials else '',
-            'password': self.credentials.password if self.credentials else '',
+            'password': (self.credentials.password if include_secrets else '[redacted]') if self.credentials else '',
             'attempts': self.attempts,
             'duration': round(self.duration, 2),
             'evidence': self.evidence,
@@ -64,6 +64,8 @@ class BruteForceBase(ABC):
     """Abstract base class for guarded credential-audit workflows."""
 
     def __init__(self, host: str, port: int, timeout: int = 3, max_threads: int = 2):
+        if not host or not 1 <= port <= 65535 or not 0 < timeout <= 300:
+            raise ValueError('a host, valid port, and timeout between 0 and 300 seconds are required')
         self.host = host
         self.port = port
         self.timeout = timeout
@@ -96,27 +98,35 @@ class BruteForceBase(ABC):
         except SafetyError as exc:
             return self._result(False, 0, 0.0, error=str(exc))
 
-        start_time = time.time()
+        start_time = time.monotonic()
+        self._attempts = 0
         credentials_iter = islice(WordlistManager.get_credentials(
-            username_list or self.get_default_username_list(),
-            password_list or self.get_default_password_list(),
+            self.get_default_username_list() if username_list is None else username_list,
+            self.get_default_password_list() if password_list is None else password_list,
+            use_defaults=False,
         ), policy.max_attempts)
 
         successful_creds = None
         attempts = 0
         semaphore = asyncio.Semaphore(self.max_threads)
+        stopped = asyncio.Event()
+        errors = []
 
         async def try_with_semaphore(creds: Credentials) -> Credentials | None:
             nonlocal attempts
             async with semaphore:
-                if attempts >= policy.max_attempts:
+                if stopped.is_set() or attempts >= policy.max_attempts:
                     return None
                 attempts += 1
                 self._attempts += 1
                 try:
-                    if await self.try_credentials(creds):
+                    if await asyncio.wait_for(self.try_credentials(creds), timeout=self.timeout * 3 + 1):
+                        if policy.stop_on_success:
+                            stopped.set()
                         return creds
-                except (OSError, asyncio.TimeoutError):
+                except Exception as exc:
+                    errors.append(f'{type(exc).__name__}: {exc}')
+                    stopped.set()
                     return None
                 return None
 
@@ -124,19 +134,26 @@ class BruteForceBase(ABC):
         for creds in credentials_iter:
             tasks.append(asyncio.create_task(try_with_semaphore(creds)))
 
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+        try:
+            results = await asyncio.gather(*tasks)
+        finally:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
         for result in results:
             if isinstance(result, Credentials):
                 successful_creds = result
                 if policy.stop_on_success:
                     break
 
-        duration = time.time() - start_time
+        duration = time.monotonic() - start_time
         return self._result(
             successful_creds is not None,
             attempts,
             duration,
             credentials=successful_creds,
+            error='; '.join(dict.fromkeys(errors)) if errors else ('no credentials supplied' if attempts == 0 else None),
         )
 
     def _result(
