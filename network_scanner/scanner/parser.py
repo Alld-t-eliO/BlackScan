@@ -75,6 +75,7 @@ def mask_proxy_url(value):
 
 def build_parser():
     parser = argparse.ArgumentParser(description='BlackScan network vulnerability scanner')
+    
     parser.add_argument('-t', '--target', help='Authorized target: IP, DNS name, or CIDR range')
     parser.add_argument('--threads', type=positive_int, default=100, help='Number of worker threads/concurrent tasks (default: 100)')
     parser.add_argument('--timeout', type=positive_int, default=2, help='Timeout in seconds (default: 2)')
@@ -101,4 +102,33 @@ def build_parser():
     parser.add_argument('--skip-discovery', action='store_true', help='Scan every target even when discovery probes fail')
     parser.add_argument('--no-external-enrichment', action='store_true', help='Disable external tools, including for full scans')
     parser.add_argument('--external-timeout', type=positive_int, default=120, help='Maximum seconds per external command (default: 120)')
+    
+    exploit_group = parser.add_argument_group('Exploitation Phase')
+    exploit_group.add_argument(
+        '--exploit',
+        action='store_true',
+        help='Enable the automatic exploitation phase after the scan (requires --intrusive-checks)'
+    )
+    exploit_group.add_argument(
+        '--exploit-timeout',
+        type=positive_int,
+        default=60,
+        help='Timeout per exploit in seconds (default: 60)'
+    )
+    exploit_group.add_argument(
+        '--exploit-targets',
+        help='Specific targets in host1:port1,host2:port2 format (for example: 192.168.1.100:22,192.168.1.100:80)'
+    )
+    exploit_group.add_argument(
+        '--exploit-auto-confirm',
+        action='store_true',
+        help='Automatically confirm the exploitation phase without prompting'
+    )
+    exploit_group.add_argument(
+        '--exploit-module',
+        choices=['ssh', 'web', 'database', 'all'],
+        default='all',
+        help='Exploitation module to use (default: all)'
+    )
+    
     return parser
