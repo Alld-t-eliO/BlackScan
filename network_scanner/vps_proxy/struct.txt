@@ -3,23 +3,24 @@ BlackScan/
 ├── main.py
 ├── configuration.py
 │
-├── scanners/
+├── network_scanner/
 │   ├── ...
+│   ├──local.py
 │
 └── vps_proxy/
     ├── __init__.py
-    ├── main.py              # orchestrateur
+    ├── main.py             
     │
     ├── proxy/
     │   ├── __init__.py
     │   ├── config.py
-    │   └── manager.py       # gestion proxy Python
+    │   └── manager.py      
     │
     ├── vps/
     │   ├── __init__.py
     │   ├── config.py
-    │   ├── ssh.sh          # connexion SSH
-    │   └── manager.sh       # exécution côté VPS
+    │   ├── ssh.sh          
+    │   └── manager.sh       
 
 
 
