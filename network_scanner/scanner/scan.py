@@ -305,14 +305,13 @@ class NetworkScanner(ReportMixin):
             current['score'] = risk.max_severity([current['score'], finding['severity']])
 
     async def run_exploit_phase(self):
-        """Run the automatic exploitation phase with detailed logs."""
-        from network_scanner.payloads.exploits.ssh_exploits import (
+        from network_scanner.payloads.exploits.critical.ssh_exploits import (
             SSHAuthBypass, SSHPrivilegeEscalation
         )
-        from network_scanner.payloads.exploits.web_exploits import (
+        from network_scanner.payloads.exploits.critical.web_exploits import (
             TomcatManagerExploit, WordPressExploit
         )
-        from network_scanner.payloads.exploits.database_exploits import (
+        from network_scanner.payloads.exploits.critical.database_exploits import (
             MySQLExploit, RedisExploit
         )
         from datetime import datetime
@@ -321,10 +320,9 @@ class NetworkScanner(ReportMixin):
         start_time = datetime.now()
         
         self.emit_log(f"\n{Colors.BOLD}{Colors.RED}{'='*70}{Colors.RESET}")
-        self.emit_log(f"{Colors.BOLD}{Colors.RED}    🚀 AUTOMATIC EXPLOITATION PHASE{Colors.RESET}")
+        self.emit_log(f"{Colors.BOLD}{Colors.RED}    - AUTOMATIC EXPLOITATION PHASE{Colors.RESET}")
         self.emit_log(f"{Colors.BOLD}{Colors.RED}{'='*70}{Colors.RESET}")
-        self.emit_log(f"{Colors.YELLOW}⚠️  WARNING: This phase attempts to exploit detected vulnerabilities{Colors.RESET}")
-        self.emit_log(f"{Colors.YELLOW}   Use ONLY on systems you own in a lab environment{Colors.RESET}")
+        self.emit_log(f"{Colors.YELLOW}  [WARNING]: This phase attempts to exploit detected vulnerabilities{Colors.RESET}")
         
         if not self.intrusive_checks:
             self.emit_log(f"\n{Colors.RED}[!] ERROR: The exploitation phase requires --intrusive-checks{Colors.RESET}")
@@ -378,14 +376,13 @@ class NetworkScanner(ReportMixin):
         return results
 
     def _analyze_targets(self):
-        """Analyze scan results to identify exploitable targets."""
-        from network_scanner.payloads.exploits.ssh_exploits import (
+        from network_scanner.payloads.exploits.critical.ssh_exlploits import (
             SSHAuthBypass, SSHPrivilegeEscalation
         )
-        from network_scanner.payloads.exploits.web_exploits import (
+        from network_scanner.payloads.exploits.critical.web_exploits import (
             TomcatManagerExploit, WordPressExploit
         )
-        from network_scanner.payloads.exploits.database_exploits import (
+        from network_scanner.payloads.exploits.critical.database_exploits import (
             MySQLExploit, RedisExploit
         )
         
@@ -466,8 +463,7 @@ class NetworkScanner(ReportMixin):
         return targets
 
     def _display_targets_summary(self, targets):
-        """Display a summary of detected targets."""
-        self.emit_log(f"\n{Colors.GREEN}✅ {len(targets)} exploitable target(s) detected:{Colors.RESET}\n")
+        self.emit_log(f"\n{Colors.GREEN}[+] {len(targets)} exploitable target(s) detected:{Colors.RESET}\n")
         
         for i, target in enumerate(targets, 1):
             risk_color = {
@@ -487,7 +483,6 @@ class NetworkScanner(ReportMixin):
             self.emit_log("")
 
     async def _execute_exploits(self, targets):
-        """Run every exploit against the selected targets."""
         results = []
         total_exploits = sum(len(t['exploits']) for t in targets)
         completed = 0
@@ -546,18 +541,18 @@ class NetworkScanner(ReportMixin):
                     
                     if result.success:
                         self.emit_log(f"\n  {Colors.RED}{'='*50}{Colors.RESET}")
-                        self.emit_log(f"  {Colors.BOLD}{Colors.RED}💀 EXPLOIT SUCCEEDED!{Colors.RESET}")
+                        self.emit_log(f"  {Colors.BOLD}{Colors.RED}[+] EXPLOIT SUCCEEDED{Colors.RESET}")
                         self.emit_log(f"  {Colors.RED}{'='*50}{Colors.RESET}")
                         self.emit_log(f"  {Colors.GREEN}✓ {result.description}{Colors.RESET}")
                         
                         if result.credentials:
-                            self.emit_log(f"  {Colors.RED}🔐 Credentials: {result.credentials[0]}:{result.credentials[1]}{Colors.RESET}")
+                            self.emit_log(f"  {Colors.RED}- Credentials: {result.credentials[0]}:{result.credentials[1]}{Colors.RESET}")
                         
                         if result.shell_url:
-                            self.emit_log(f"  {Colors.CYAN}🌐 Shell URL: {result.shell_url}{Colors.RESET}")
+                            self.emit_log(f"  {Colors.CYAN}- Shell URL: {result.shell_url}{Colors.RESET}")
                         
                         if result.proof:
-                            self.emit_log(f"  {Colors.WHITE}📄 Evidence: {result.proof[:300]}{Colors.RESET}")
+                            self.emit_log(f"  {Colors.WHITE}- Evidence: {result.proof[:300]}{Colors.RESET}")
                         
                         target_key = f"{target['host']}:{target['port']}"
                         exploit_finding = {
@@ -565,7 +560,7 @@ class NetworkScanner(ReportMixin):
                             'severity': 'critical',
                             'target': target_key,
                             'evidence': result.proof or str(result.output),
-                            'recommendation': '🛑 SYSTEM COMPROMISED - Immediate action required',
+                            'recommendation': '[SUCCESS] SYSTEM COMPROMISED - Immediate action required',
                             'exploit_details': result.as_dict()
                         }
                         
@@ -623,7 +618,6 @@ class NetworkScanner(ReportMixin):
         return results
 
     def _display_exploitation_summary(self, results, start_time):
-        """Display a detailed exploitation summary."""
         from datetime import datetime
         duration = datetime.now() - start_time
         
@@ -631,16 +625,16 @@ class NetworkScanner(ReportMixin):
         failed = [r for r in results if not r.success]
         
         self.emit_log(f"\n{Colors.BOLD}{Colors.CYAN}{'='*70}{Colors.RESET}")
-        self.emit_log(f"{Colors.BOLD}{Colors.PURPLE}    📊 EXPLOITATION REPORT - COMPLETE SUMMARY{Colors.RESET}")
+        self.emit_log(f"{Colors.BOLD}{Colors.PURPLE}    [+] EXPLOITATION REPORT - COMPLETE SUMMARY{Colors.RESET}")
         self.emit_log(f"{Colors.BOLD}{Colors.CYAN}{'='*70}{Colors.RESET}")
         
-        self.emit_log(f"\n{Colors.WHITE}⏱️  Total duration: {duration.total_seconds():.2f}s{Colors.RESET}")
-        self.emit_log(f"{Colors.WHITE}🎯 Exploits attempted: {len(results)}{Colors.RESET}")
-        self.emit_log(f"{Colors.GREEN}✅ Successful exploits: {len(successful)}{Colors.RESET}")
-        self.emit_log(f"{Colors.RED}❌ Failed exploits: {len(failed)}{Colors.RESET}")
+        self.emit_log(f"\n{Colors.WHITE}-  Total duration: {duration.total_seconds():.2f}s{Colors.RESET}")
+        self.emit_log(f"{Colors.WHITE}- Exploits attempted: {len(results)}{Colors.RESET}")
+        self.emit_log(f"{Colors.GREEN}- Successful exploits: {len(successful)}{Colors.RESET}")
+        self.emit_log(f"{Colors.RED}- Failed exploits: {len(failed)}{Colors.RESET}")
         
         if successful:
-            self.emit_log(f"\n{Colors.BOLD}{Colors.RED}💀 SUCCESSFUL COMPROMISES:{Colors.RESET}")
+            self.emit_log(f"\n{Colors.BOLD}{Colors.RED}[SUCCESS] SUCCESSFUL COMPROMISES:{Colors.RESET}")
             self.emit_log(f"{Colors.BOLD}{'─'*70}{Colors.RESET}")
             
             for i, result in enumerate(successful, 1):
@@ -648,23 +642,23 @@ class NetworkScanner(ReportMixin):
                 self.emit_log(f"     Exploit: {result.description}")
                 
                 if result.credentials:
-                    self.emit_log(f"     {Colors.RED}🔐 Credentials: {result.credentials[0]}:{result.credentials[1]}{Colors.RESET}")
+                    self.emit_log(f"     {Colors.RED}- Credentials: {result.credentials[0]}:{result.credentials[1]}{Colors.RESET}")
                 
                 if result.shell_url:
-                    self.emit_log(f"     {Colors.CYAN}🌐 Shell: {result.shell_url}{Colors.RESET}")
+                    self.emit_log(f"     {Colors.CYAN}- Shell: {result.shell_url}{Colors.RESET}")
                 
                 if result.proof:
-                    self.emit_log(f"     {Colors.WHITE}📄 Evidence: {result.proof[:150]}{Colors.RESET}")
+                    self.emit_log(f"     {Colors.WHITE}- Evidence: {result.proof[:150]}{Colors.RESET}")
                 
                 if result.metadata:
-                    self.emit_log(f"     📋 Metadata:")
+                    self.emit_log(f"     - Metadata:")
                     for key, value in result.metadata.items():
                         if isinstance(value, str) and len(value) > 100:
                             value = value[:100] + "..."
                         self.emit_log(f"        • {key}: {value}")
         
         if failed:
-            self.emit_log(f"\n{Colors.BOLD}{Colors.YELLOW}⚠️  FAILURES:{Colors.RESET}")
+            self.emit_log(f"\n{Colors.BOLD}{Colors.YELLOW}- FAILURES:{Colors.RESET}")
             self.emit_log(f"{Colors.BOLD}{'─'*70}{Colors.RESET}")
             
             for i, result in enumerate(failed[:10], 1):
@@ -673,24 +667,22 @@ class NetworkScanner(ReportMixin):
                 self.emit_log(f"     {Colors.YELLOW}Error: {result.error or 'Unknown reason'}{Colors.RESET}")
         
         if not successful:
-            self.emit_log(f"\n{Colors.YELLOW}⚠️  No successful compromises. The targets appear to be properly secured.{Colors.RESET}")
+            self.emit_log(f"\n{Colors.YELLOW}[!]  No successful compromises. The targets appear to be properly secured.{Colors.RESET}")
         
         self.emit_log(f"\n{Colors.BOLD}{Colors.CYAN}{'─'*70}{Colors.RESET}")
         if successful:
-            self.emit_log(f"{Colors.BOLD}{Colors.RED}🚨 URGENT RECOMMENDATIONS:{Colors.RESET}")
-            self.emit_log(f"  • Change all compromised passwords IMMEDIATELY")
+            self.emit_log(f"{Colors.BOLD}{Colors.RED}[] URGENT RECOMMENDATIONS:{Colors.RESET}")
             self.emit_log(f"  • Review active sessions on compromised systems")
-            self.emit_log(f"  • Analyze logs for possible malicious activity")
-            self.emit_log(f"  • Audit security configurations")
+            self.emit_log(f"  • Analyze logs for possible interesting datas")
+            self.emit_log(f"  • Try to identify the exploited vulnerability and use it")
         else:
-            self.emit_log(f"{Colors.GREEN}✅ No compromise detected. Continue following good security practices.{Colors.RESET}")
+            self.emit_log(f"{Colors.GREEN}[+] No compromise detected. Continue following good security practices.{Colors.RESET}")
         
         self.emit_log(f"\n{Colors.BOLD}{Colors.CYAN}{'='*70}{Colors.RESET}")
-        self.emit_log(f"{Colors.WHITE}📁 Detailed report saved in the 'reports/' directory{Colors.RESET}")
+        self.emit_log(f"{Colors.WHITE}[-] Detailed report saved in the 'reports/' directory{Colors.RESET}")
         self.emit_log(f"{Colors.BOLD}{Colors.CYAN}{'='*70}{Colors.RESET}\n")
 
     def _save_exploit_results(self, results):
-        """Save detailed exploitation results."""
         import json
         import os
         from datetime import datetime
