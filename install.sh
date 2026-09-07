@@ -4,10 +4,16 @@ set -eu
 ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 PYTHON_BIN=${PYTHON:-python3}
 MODE=${1:-}
+VENV_DIR="$ROOT_DIR/venv"
 
 if ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
-    printf '%s\n' "ERROR: python3 is required."
+    printf '%s\n' "ERROR: Python 3.10 or newer is required."
     exit 1
+fi
+
+if [ "${2:-}" != "" ]; then
+    printf '%s\n' "Usage: ./install.sh [--dev]"
+    exit 2
 fi
 
 "$PYTHON_BIN" - <<'PY'
@@ -18,28 +24,24 @@ if sys.version_info < (3, 10):
 PY
 
 cd "$ROOT_DIR"
-"$PYTHON_BIN" -m venv venv
-. "$ROOT_DIR/venv/bin/activate"
-python -m pip install --upgrade pip setuptools wheel
+"$PYTHON_BIN" -m venv "$VENV_DIR"
+"$VENV_DIR/bin/python" -m pip install --upgrade pip setuptools wheel
 
 case "$MODE" in
     "")
-        python -m pip install -e .
-        ;;
-    "--audit")
-        python -m pip install -e ".[audit]"
+        "$VENV_DIR/bin/python" -m pip install -e .
         ;;
     "--dev")
-        python -m pip install -r requirements.txt
+        "$VENV_DIR/bin/python" -m pip install -r requirements.txt
         ;;
     *)
-        printf '%s\n' "Usage: ./install.sh [--audit|--dev]"
+        printf '%s\n' "Usage: ./install.sh [--dev]"
         exit 2
         ;;
 esac
 
-mkdir -p reports
-python -m network_scanner --help >/dev/null
+mkdir -p reports network_scanner/payloads/payloads
+"$VENV_DIR/bin/python" -m network_scanner --help >/dev/null
 
 printf '%s\n' ""
 printf '%s\n' "BlackScan installed."

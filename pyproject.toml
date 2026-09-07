@@ -11,7 +11,7 @@ requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [{ name = "BlackScan contributors" }]
 dependencies = []
-keywords = ["network-scanner", "security", "reconnaissance", "pentest", "reporting"]
+keywords = ["network-scanner", "security", "asset-discovery", "reporting", "defensive-security"]
 classifiers = [
   "Development Status :: 3 - Alpha",
   "Environment :: Console",
@@ -21,22 +21,16 @@ classifiers = [
   "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
   "Topic :: Security",
 ]
 
 [project.optional-dependencies]
-mysql = ["mysql-connector-python>=8.0.0"]
-ssh = ["paramiko>=3.4.0"]
-http = ["aiohttp>=3.9.0"]
-audit = [
-  "aiohttp>=3.9.0",
-  "mysql-connector-python>=8.0.0",
-  "paramiko>=3.4.0",
-]
 dev = ["pytest>=8.0.0", "ruff>=0.5.0"]
 
 [project.scripts]
-blackscan = "network_scanner.scanner:main"
+blackscan = "network_scanner.scanner.main:main"
 
 [tool.setuptools.packages.find]
 include = ["network_scanner*"]
@@ -44,3 +38,6 @@ include = ["network_scanner*"]
 [tool.ruff]
 line-length = 120
 target-version = "py310"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

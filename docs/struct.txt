@@ -3,111 +3,110 @@ BlackScan/
 │   ├── ISSUE_TEMPLATE/
 │   │   ├── bug_report.md
 │   │   └── feature_request.md
-│   ├── pull_request_template.md
-│   └── workflows/
-│       └── ci.yml
-├── network_scanner/
-│   ├── __init__.py
-│   ├── __main__.py
-│   ├── settings.py
-│   ├── scanner/
-│   │   ├── __init__.py
-│   │   ├── main.py
-│   │   ├── scan.py
-│   │   ├── report.py
-│   │   ├── comparaison.py
-│   │   └── parser.py
-│   ├── core/
-│   │   ├── __init__.py
-│   │   └── ui.py
-│   ├── checks/
-│   │   ├── __init__.py
-│   │   ├── base.py
-│   │   └── builtin.py
-│   ├── modules/
-│   │   ├── __init__.py
-│   │   ├── auto_exploit.py
-│   │   ├── interactive.py
-│   │   ├── external_tools.py
-│   │   ├── brute_force/
-│   │   │   ├── __init__.py
-│   │   │   ├── base.py
-│   │   │   ├── ftp.py
-│   │   │   ├── http_basic.py
-│   │   │   ├── mysql.py
-│   │   │   └── ssh.py
-│   │   ├── os_detection.py
-│   │   ├── ping_sweep.py
-│   │   ├── port_scanner.py
-│   │   ├── report_diff.py
-│   │   ├── risk.py
-│   │   ├── service_scan.py
-│   │   └── vulnerability.py
-│   ├── payloads/
-│   │   ├── __init__.py
-│   │   └── base.py
-│   └── utils/
-│       ├── logger.py
-│       └── utils.py
+│   ├── workflows/
+│   │   └── ci.yml
+│   └── pull_request_template.md
 ├── config/
 │   └── exploit_config.yaml
 ├── docs/
 │   ├── images/
 │   │   ├── blackscan-home.png
 │   │   └── blackscan-scan-example.png
+│   ├── learning/
+│   │   ├── README.md
+│   │   ├── network_scanner__modules__auto_exploit.py.txt
+│   │   ├── network_scanner__payloads__exploits__critical____init__.py.txt
+│   │   ├── network_scanner__payloads__exploits__ssh____init__.py.txt
+│   │   └── network_scanner__payloads__payloads__base.py.txt
 │   └── struct.txt
+├── network_scanner/
+│   ├── __init__.py
+│   ├── __main__.py
+│   ├── settings.py
+│   ├── checks/
+│   │   ├── __init__.py
+│   │   ├── base.py
+│   │   └── builtin.py
+│   ├── core/
+│   │   ├── __init__.py
+│   │   └── ui.py
+│   ├── modules/
+│   │   ├── __init__.py
+│   │   ├── auto_exploit.py
+│   │   ├── external_tools.py
+│   │   ├── interactive.py
+│   │   ├── os_detection.py
+│   │   ├── ping_sweep.py
+│   │   ├── port_scanner.py
+│   │   ├── report_diff.py
+│   │   ├── risk.py
+│   │   ├── service_scan.py
+│   │   ├── vulnerability.py
+│   │   └── brute_force/
+│   │       ├── __init__.py
+│   │       ├── base.py
+│   │       ├── ftp.py
+│   │       ├── http_basic.py
+│   │       ├── mysql.py
+│   │       └── ssh.py
+│   ├── payloads/
+│   │   ├── __init__.py
+│   │   ├── base.py
+│   │   ├── generators/
+│   │   ├── wordlists/
+│   │   ├── exploits/
+│   │   │   ├── base.py
+│   │   │   ├── databases/
+│   │   │   ├── services/
+│   │   │   ├── critical/
+│   │   │   │   ├── __init__.py
+│   │   │   │   ├── critical_exploits.py
+│   │   │   │   ├── database_exploits.py
+│   │   │   │   └── web_exploits.py
+│   │   │   ├── ssh/
+│   │   │   │   ├── __init__.py
+│   │   │   │   ├── auth_bypass.py
+│   │   │   │   ├── persistence.py
+│   │   │   │   └── privilege_escalation.py
+│   │   │   └── web/
+│   │   │       ├── __init__.py
+│   │   │       └── rce.py
+│   │   └── payloads/
+│   │       ├── __init__.py
+│   │       ├── base.py
+│   │       ├── ftp.py
+│   │       ├── http_basic.py
+│   │       ├── mysql.py
+│   │       └── ssh.py
+│   ├── scanner/
+│   │   ├── __init__.py
+│   │   ├── comparaison.py
+│   │   ├── main.py
+│   │   ├── parser.py
+│   │   ├── report.py
+│   │   └── scan.py
+│   └── utils/
+│       ├── logger.py
+│       └── utils.py
 ├── tests/
 │   ├── __init__.py
+│   ├── test_regressions.py
 │   └── test_scanner.py
 ├── .gitignore
 ├── CONTRIBUTING.md
 ├── LICENSE
 ├── README.md
 ├── SECURITY.md
+├── dev.md
+├── install.sh
+├── payload/
 ├── pyproject.toml
 └── requirements.txt
 
-Key responsibilities:
-├── network_scanner/__main__.py
-│   └── Module entrypoint for python -m network_scanner
-├── network_scanner/scanner/main.py
-│   └── CLI orchestration and command routing
-├── network_scanner/scanner/scan.py
-│   └── NetworkScanner class, host scanning, service scanning, progress callbacks, and scan flow
-├── network_scanner/scanner/report.py
-│   └── Colors, report mixin, summaries, and JSON/HTML/CSV/Markdown report generation
-├── network_scanner/scanner/comparaison.py
-│   └── Multi-report vulnerability trend report generation
-├── network_scanner/scanner/parser.py
-│   └── CLI parser, port parsing, proxy validation, and proxy masking
-├── network_scanner/scanner/__init__.py
-│   └── Public scanner package exports for backward-compatible imports
-├── network_scanner/core/ui.py
-│   └── Interactive TUI for scan setup, saved target profiles, scan progress, external-tool listing, and JSON report review
-├── network_scanner/modules/ping_sweep.py
-│   └── Host discovery with ICMP and TCP fallback probes
-├── network_scanner/modules/port_scanner.py
-│   └── Async TCP connect scanning
-├── network_scanner/modules/service_scan.py
-│   └── Service names, banners, HTTP metadata, TLS metadata, proxy-aware web requests, and web path probing
-├── network_scanner/checks/
-│   └── Built-in exposure checks and check framework
-├── network_scanner/modules/risk.py
-│   └── Service risk factors and severity scoring
-├── network_scanner/modules/report_diff.py
-│   └── Point-in-time report diffs and multi-report vulnerability trend analysis
-├── network_scanner/modules/brute_force/
-│   └── Guarded credential-audit compatibility helpers, not exposed by the main CLI
-└── config/exploit_config.yaml
-    └── Documents disabled exploitation-oriented legacy settings
-
-Ignored/generated locally:
+Excluded local/generated directories:
 ├── .git/
 ├── .ruff_cache/
+├── __pycache__/
 ├── blackscan.egg-info/
 ├── reports/
-├── venv/
-├── __pycache__/
-├── .DS_Store
-├── scan/report JSON, HTML, CSV, and Markdown outputs
-└── ~/.blackscan/profiles.json for saved TUI target profiles
+└── venv/
