@@ -1,0 +1,44 @@
+BlackScan/
+│
+├── main.py
+├── configuration.py
+│
+├── scanners/
+│   ├── ...
+│
+└── vps_proxy/
+    ├── __init__.py
+    ├── main.py              # orchestrateur
+    │
+    ├── proxy/
+    │   ├── __init__.py
+    │   ├── config.py
+    │   └── manager.py       # gestion proxy Python
+    │
+    ├── vps/
+    │   ├── __init__.py
+    │   ├── config.py
+    │   ├── ssh.sh          # connexion SSH
+    │   └── manager.sh       # exécution côté VPS
+
+
+
+
+                         BlackScan
+                            │
+                            ▼
+                  vps_proxy/main.py
+                            │
+              ┌─────────────┼─────────────┐
+              │             │             │
+            LOCAL         PROXY           VPS
+              │             │             │
+              │       Python/Proxy        │
+              │             │             │
+              │             ▼             │
+              │        ProxyManager        │
+              │                           │
+              │                      SSHManager
+              │                           │
+              ▼                           ▼
+           Scanner                    VPS
