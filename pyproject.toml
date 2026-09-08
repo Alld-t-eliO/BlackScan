@@ -1,43 +1,49 @@
-[build-system]
-requires = ["setuptools>=68"]
-build-backend = "setuptools.build_meta"
-
 [project]
 name = "blackscan"
-version = "0.2.0"
-description = "Authorized network discovery, port scanning, service fingerprinting, and lightweight exposure reporting."
+version = "0.3.0"
+description = "Network vulnerability scanner with exploitation capabilities"
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "MIT" }
-authors = [{ name = "BlackScan contributors" }]
-dependencies = []
-keywords = ["network-scanner", "security", "asset-discovery", "reporting", "defensive-security"]
-classifiers = [
-  "Development Status :: 3 - Alpha",
-  "Environment :: Console",
-  "Intended Audience :: Information Technology",
-  "License :: OSI Approved :: MIT License",
-  "Programming Language :: Python :: 3",
-  "Programming Language :: Python :: 3.10",
-  "Programming Language :: Python :: 3.11",
-  "Programming Language :: Python :: 3.12",
-  "Programming Language :: Python :: 3.13",
-  "Programming Language :: Python :: 3.14",
-  "Topic :: Security",
+license = {text = "MIT"}
+authors = [
+    {name = "Aegon", email = "aegon@blackscan.dev"}
 ]
-
-[project.optional-dependencies]
-dev = ["pytest>=8.0.0", "ruff>=0.5.0"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
 
 [project.scripts]
 blackscan = "network_scanner.scanner.main:main"
 
-[tool.setuptools.packages.find]
-include = ["network_scanner*"]
+[project.optional-dependencies]
+dev = [
+    "ruff>=0.1.0",
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+    "mypy>=1.0.0",
+    "black>=23.0.0",
+    "isort>=5.0.0",
+]
+audit = [
+    "paramiko>=3.0.0",
+    "aiohttp>=3.8.0",
+    "mysql-connector-python>=8.0.0",
+    "redis>=5.0.0",
+]
+all = [
+    "paramiko>=3.0.0",
+    "aiohttp>=3.8.0",
+    "mysql-connector-python>=8.0.0",
+    "redis>=5.0.0",
+    "ruff>=0.1.0",
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+]
 
-[tool.ruff]
-line-length = 120
-target-version = "py310"
-
-[tool.pytest.ini_options]
-testpaths = ["tests"]
+[project.urls]
+Homepage = "https://github.com/Aegon/BlackScan"
+Repository = "https://github.com/Aegon/BlackScan"
+Issues = "https://github.com/Aegon/BlackScan/issues"
