@@ -1,6 +1,6 @@
 # BlackScan
 
-BlackScan is an authorized network scanner written in Python for infrastructure where you have explicit permission to scan. All scan results come from real network responses; there is no simulation mode.
+BlackScan is an authorized network scanner written in Python for infrastructure where you have explicit permission to scan. All scan results come from real network responses; there is no simulation mode
 
 It performs host discovery, TCP port scanning, lightweight service fingerprinting, basic HTTP/TLS checks, risk scoring, and report generation. It is not a replacement for mature tools such as Nmap or commercial vulnerability scanners.
 
