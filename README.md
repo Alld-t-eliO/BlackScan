@@ -240,24 +240,6 @@ A separate execution-routing layer is currently being developed under:
 
 network_scanner/vps_proxy/
 
-Its purpose is to let BlackScan select where an execution backend should operate:
-
-                         BlackScan
-                            |
-                            v
-                  vps_proxy/main.py
-                    Orchestrator
-                            |
-              +-------------+-------------+
-              |             |             |
-            LOCAL         PROXY           VPS
-              |             |             |
-              v             v             v
-        LocalBackend    ProxyManager   VPSManager
-                                            |
-                                            v
-                                     SSHConnection
-
 The global mode is selected from config.py:
 
 EXECUTION_MODE = "local"
