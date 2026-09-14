@@ -548,26 +548,3 @@ Then:
 If you need a specific Python executable:
 
 PYTHON=/path/to/python3 ./install.sh
-
-Design Direction
-
-The project is intentionally moving toward a clean separation between:
-
-Scanner
-   |
-   +--> discovery
-   +--> ports
-   +--> services
-   +--> checks
-   +--> risk
-   +--> reporting
-
-and:
-
-Execution backend
-   |
-   +--> LOCAL
-   +--> PROXY
-   +--> VPS
-
-This allows the scanner logic to remain independent from the machine or network path used to perform an authorized scan.
