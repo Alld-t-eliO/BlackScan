@@ -111,7 +111,7 @@ def main():
             exploit_timeout=args.exploit_timeout,
             exploit_targets=args.exploit_targets,
             exploit_auto_confirm=args.exploit_auto_confirm,
-            epxloit_module=args.exploit_module,
+            exploit_module=args.exploit_module,
         )
     except ValueError as exc:
         parser.error(str(exc))

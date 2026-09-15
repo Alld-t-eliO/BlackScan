@@ -16,7 +16,6 @@ from network_scanner.modules import (
 from network_scanner.scanner.parser import validate_target
 from network_scanner.scanner.report import Colors, ReportMixin
 
-
 class NetworkScanner(ReportMixin):
     def __init__(
         self,
@@ -77,13 +76,11 @@ class NetworkScanner(ReportMixin):
         self.external_enrichment = not no_external_enrichment and bool(external_enrichment or aggressive or self.profile == 'full')
         self.skip_discovery = skip_discovery
         self.external_timeout = external_timeout
-        
         self.exploit_mode = exploit_mode
         self.exploit_timeout = exploit_timeout
         self.exploit_targets = exploit_targets
         self.exploit_auto_confirm = exploit_auto_confirm
         self.exploit_module = exploit_module
-        
         self._error_lock = threading.Lock()
         self.progress_callback = progress_callback
         self.log_callback = log_callback
@@ -305,15 +302,10 @@ class NetworkScanner(ReportMixin):
             current['score'] = risk.max_severity([current['score'], finding['severity']])
 
     async def run_exploit_phase(self):
-        from network_scanner.payloads.exploits.critical.ssh_exploits import (
-            SSHAuthBypass, SSHPrivilegeEscalation
-        )
-        from network_scanner.payloads.exploits.critical.web_exploits import (
-            TomcatManagerExploit, WordPressExploit
-        )
-        from network_scanner.payloads.exploits.critical.database_exploits import (
-            MySQLExploit, RedisExploit
-        )
+        from network_scanner.payloads.exploits.ssh.ssh_exploits import (SSHAuthBypass, SSHPrivilegeEscalation)
+        from network_scanner.payloads.exploits.web.web_exploits import (TomcatManagerExploit, WordPressExploit)
+        from network_scanner.payloads.exploits.databases.database_exploits import (MySQLExploit, RedisExploit)
+        from network_scanner.payloads.exploits.xss.exploit_xss import SliderRevolutionExploit
         from datetime import datetime
         import json
         
@@ -376,15 +368,10 @@ class NetworkScanner(ReportMixin):
         return results
 
     def _analyze_targets(self):
-        from network_scanner.payloads.exploits.critical.ssh_exlploits import (
-            SSHAuthBypass, SSHPrivilegeEscalation
-        )
-        from network_scanner.payloads.exploits.critical.web_exploits import (
-            TomcatManagerExploit, WordPressExploit
-        )
-        from network_scanner.payloads.exploits.critical.database_exploits import (
-            MySQLExploit, RedisExploit
-        )
+        from network_scanner.payloads.exploits.ssh.ssh_exploits import (SSHAuthBypass, SSHPrivilegeEscalation)
+        from network_scanner.payloads.exploits.web.web_exploits import (TomcatManagerExploit, WordPressExploit)
+        from network_scanner.payloads.exploits.databases.database_exploits import (MySQLExploit, RedisExploit)
+        from network_scanner.payloads.exploits.xss.exploit_xss import SliderRevolutionExploit
         
         targets = []
         
@@ -395,7 +382,8 @@ class NetworkScanner(ReportMixin):
             ],
             'http': [
                 {'class': TomcatManagerExploit, 'name': 'Tomcat Manager - Default credentials', 'severity': 'critical'},
-                {'class': WordPressExploit, 'name': 'WordPress - Vulnerable plugins', 'severity': 'high'}
+                {'class': WordPressExploit, 'name': 'WordPress - Vulnerable plugins', 'severity': 'high'},
+                {'class': SliderRevolutionExploit, 'name': 'Slider Revolution (CVE-2024-34444)', 'severity': 'high'},
             ],
             'https': [
                 {'class': TomcatManagerExploit, 'name': 'Tomcat Manager (HTTPS) - Default credentials', 'severity': 'critical'},
