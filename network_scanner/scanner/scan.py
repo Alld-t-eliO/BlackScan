@@ -2,19 +2,85 @@ import asyncio
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
-
+from network_scanner.payloads.exploits import (list_exploits, Exploit,)
+from network_scanner.payloads.exploits.ssh.auth_bypass import (SSHAuthBypass, SSHEmptyPasswordExploit, SSHUsernameEnumerator,)
+from network_scanner.payloads.exploits.ssh.privilege_escalation import (SSHPrivilegeEscalation,)
+from network_scanner.payloads.exploits.ssh.persistence import (SSHPersistence,)
+from network_scanner.payloads.exploits.web.web_exploits import (TomcatManagerExploit, DirectoryTraversalExploit, WordPressExploit, JenkinsExploit,)
+from network_scanner.payloads.exploits.databases.database_exploits import (MySQLExploit, RedisExploit, MongoDBExploit, PostgreSQLExploit,)
+from network_scanner.payloads.exploits.web.rce import (CommandInjectionExploit, SSTIExploit, FileUploadRCE, LFIExploit, XXEExploit, SSRFExploit, DeserializationExploit, JWTExploit,)
+from network_scanner.payloads.exploits.xss import (SliderRevolutionExploit,)
 from network_scanner import settings
-from network_scanner.modules import (
-    external_tools,
-    os_detection,
-    ping_sweep,
-    port_scanner,
-    risk,
-    service_scan,
-    vulnerability,
-)
+from network_scanner.modules import (external_tools, os_detection, ping_sweep, port_scanner, risk, service_scan, vulnerability,)
 from network_scanner.scanner.parser import validate_target
 from network_scanner.scanner.report import Colors, ReportMixin
+
+
+EXPLOIT_REGISTRY: dict[str, list[type]] = {
+    'ssh': [
+        SSHAuthBypass,
+        SSHEmptyPasswordExploit,
+        SSHUsernameEnumerator,
+        SSHPrivilegeEscalation,
+        SSHPersistence,
+    ],
+    'http': [
+        TomcatManagerExploit,
+        JenkinsExploit,
+        WordPressExploit,
+        DirectoryTraversalExploit,
+        CommandInjectionExploit,
+        SSTIExploit,
+        FileUploadRCE,
+        LFIExploit,
+        XXEExploit,
+        SSRFExploit,
+        DeserializationExploit,
+        JWTExploit,
+        SliderRevolutionExploit,
+    ],
+    'https': [
+        TomcatManagerExploit,
+        JenkinsExploit,
+        WordPressExploit,
+        DirectoryTraversalExploit,
+        CommandInjectionExploit,
+        SSTIExploit,
+        FileUploadRCE,
+        LFIExploit,
+        XXEExploit,
+        SSRFExploit,
+        DeserializationExploit,
+        JWTExploit,
+        SliderRevolutionExploit,
+    ],
+    'mysql': [
+        MySQLExploit,
+    ],
+    'redis': [
+        RedisExploit,
+    ],
+    'mongodb': [
+        MongoDBExploit,
+    ],
+    'postgresql': [
+        PostgreSQLExploit,
+    ],
+}
+
+PORT_TO_SERVICE: dict[int, str] = {
+    22: 'ssh',
+    80: 'http',
+    443: 'https',
+    8000: 'http',
+    8080: 'http',
+    8443: 'https',
+    8888: 'http',
+    3306: 'mysql',
+    5432: 'postgresql',
+    6379: 'redis',
+    27017: 'mongodb',
+}
 
 class NetworkScanner(ReportMixin):
     def __init__(
@@ -102,11 +168,11 @@ class NetworkScanner(ReportMixin):
         if self.progress_callback:
             self.progress_callback(max(0, min(100, int(percent))), message)
 
-    def emit_log(self, message):
+    def emit_log(self, message, end='\n'):
         if self.log_callback:
             self.log_callback(message)
         else:
-            print(message)
+            print(message, end=end)
 
     def scan_network(self):
         try:
@@ -301,173 +367,424 @@ class NetworkScanner(ReportMixin):
             current = self.results['risks'].setdefault(target, {'score': 'info', 'factors': []})
             current['score'] = risk.max_severity([current['score'], finding['severity']])
 
-    async def run_exploit_phase(self):
-        from network_scanner.payloads.exploits.ssh.ssh_exploits import (SSHAuthBypass, SSHPrivilegeEscalation)
-        from network_scanner.payloads.exploits.web.web_exploits import (TomcatManagerExploit, WordPressExploit)
-        from network_scanner.payloads.exploits.databases.database_exploits import (MySQLExploit, RedisExploit)
-        from network_scanner.payloads.exploits.xss.exploit_xss import SliderRevolutionExploit
+     async def run_exploit_phase(self) -> List[ExploitResult]:
         from datetime import datetime
-        import json
-        
+
         start_time = datetime.now()
-        
+
         self.emit_log(f"\n{Colors.BOLD}{Colors.RED}{'='*70}{Colors.RESET}")
-        self.emit_log(f"{Colors.BOLD}{Colors.RED}    - AUTOMATIC EXPLOITATION PHASE{Colors.RESET}")
+        self.emit_log(f"{Colors.BOLD}{Colors.RED}    AUTOMATIC EXPLOITATION PHASE{Colors.RESET}")
         self.emit_log(f"{Colors.BOLD}{Colors.RED}{'='*70}{Colors.RESET}")
-        self.emit_log(f"{Colors.YELLOW}  [WARNING]: This phase attempts to exploit detected vulnerabilities{Colors.RESET}")
-        
+        self.emit_log(f"{Colors.YELLOW}  [WARNING] Only run on authorized targets{Colors.RESET}")
+
         if not self.intrusive_checks:
-            self.emit_log(f"\n{Colors.RED}[!] ERROR: The exploitation phase requires --intrusive-checks{Colors.RESET}")
-            self.emit_log(f"{Colors.YELLOW}[!] Add --intrusive-checks to your command to enable this phase{Colors.RESET}")
+            self.emit_log(
+                f"\n{Colors.RED}[!] Exploitation requires --intrusive-checks{Colors.RESET}"
+            )
             return []
-        
-        missing_deps = []
-        try:
-            import paramiko
-        except ImportError:
-            missing_deps.append("paramiko (pip install paramiko)")
-        
-        try:
-            import aiohttp
-        except ImportError:
-            missing_deps.append("aiohttp (pip install aiohttp)")
-        
-        if missing_deps:
+
+        missing = []
+        for dep in ('paramiko', 'aiohttp'):
+            try:
+                __import__(dep)
+            except ImportError:
+                missing.append(f"{dep} (pip install {dep})")
+
+        if missing:
             self.emit_log(f"\n{Colors.RED}[!] Missing dependencies:{Colors.RESET}")
-            for dep in missing_deps:
-                self.emit_log(f"    • {dep}")
-            self.emit_log(f"\n{Colors.YELLOW}[!] Install the missing dependencies and try again{Colors.RESET}")
+            for dep in missing:
+                self.emit_log(f"    - {dep}")
             return []
-        
+
         self.emit_log(f"\n{Colors.BLUE}[*] Analyzing exploitable targets...{Colors.RESET}")
         targets = self._analyze_targets()
-        
+
         if not targets:
-            self.emit_log(f"{Colors.YELLOW}[!] No exploitable targets were detected in the scan results{Colors.RESET}")
+            self.emit_log(
+                f"{Colors.YELLOW}[!] No exploitable targets detected{Colors.RESET}"
+            )
             return []
-        
+
         self._display_targets_summary(targets)
-        
-        if not self.exploit_auto_confirm:
-            self.emit_log(f"\n{Colors.BOLD}{Colors.CYAN}➤ Start the exploitation phase? (y/N): {Colors.RESET}", end='')
-            response = input().strip().lower()
-            
-            if response not in ['y', 'yes', 'o', 'oui']:
-                self.emit_log(f"{Colors.YELLOW}[!] Exploitation phase cancelled by the user{Colors.RESET}")
+
+        if not getattr(self, 'exploit_auto_confirm', False):
+            self.emit_log(
+                f"\n{Colors.BOLD}{Colors.CYAN}"
+                f"  Start the exploitation phase? (y/N): "
+                f"{Colors.RESET}",
+                end='',
+            )
+            try:
+                response = input().strip().lower()
+            except EOFError:
+                response = 'n'
+
+            if response not in ('y', 'yes', 'o', 'oui'):
+                self.emit_log(f"{Colors.YELLOW}[!] Cancelled by user{Colors.RESET}")
                 return []
-        else:
-            self.emit_log(f"\n{Colors.GREEN}[+] Auto-confirmation enabled. Starting automatically...{Colors.RESET}")
-        
-        self.emit_log(f"\n{Colors.GREEN}[+] Confirmation received. Starting exploitation...{Colors.RESET}\n")
-        
+
         results = await self._execute_exploits(targets)
-        
         self._display_exploitation_summary(results, start_time)
         self._save_exploit_results(results)
-        
+
         return results
 
-    def _analyze_targets(self):
-        from network_scanner.payloads.exploits.ssh.ssh_exploits import (SSHAuthBypass, SSHPrivilegeEscalation)
-        from network_scanner.payloads.exploits.web.web_exploits import (TomcatManagerExploit, WordPressExploit)
-        from network_scanner.payloads.exploits.databases.database_exploits import (MySQLExploit, RedisExploit)
-        from network_scanner.payloads.exploits.xss.exploit_xss import SliderRevolutionExploit
-        
-        targets = []
-        
-        all_exploits = {
-            'ssh': [
-                {'class': SSHAuthBypass, 'name': 'SSH - Default credentials', 'severity': 'critical'},
-                {'class': SSHPrivilegeEscalation, 'name': 'SSH - Privilege escalation', 'severity': 'critical'}
-            ],
-            'http': [
-                {'class': TomcatManagerExploit, 'name': 'Tomcat Manager - Default credentials', 'severity': 'critical'},
-                {'class': WordPressExploit, 'name': 'WordPress - Vulnerable plugins', 'severity': 'high'},
-                {'class': SliderRevolutionExploit, 'name': 'Slider Revolution (CVE-2024-34444)', 'severity': 'high'},
-            ],
-            'https': [
-                {'class': TomcatManagerExploit, 'name': 'Tomcat Manager (HTTPS) - Default credentials', 'severity': 'critical'},
-                {'class': WordPressExploit, 'name': 'WordPress (HTTPS) - Vulnerable plugins', 'severity': 'high'}
-            ],
-            'mysql': [
-                {'class': MySQLExploit, 'name': 'MySQL - Default credentials', 'severity': 'critical'}
-            ],
-            'redis': [
-                {'class': RedisExploit, 'name': 'Redis - Unauthenticated access', 'severity': 'critical'}
-            ]
+    async def _execute_exploits(self, targets: List[Dict[str, Any]]) -> List[ExploitResult]:
+        results: List[ExploitResult] = []
+        total = sum(len(t['exploits']) for t in targets)
+        completed = 0
+
+        self.emit_log(
+            f"{Colors.BLUE}[*] Starting {total} exploitation attempt(s)..."
+            f"{Colors.RESET}\n"
+        )
+
+        for target_idx, target in enumerate(targets, 1):
+            self.emit_log(
+                f"\n{Colors.BOLD}{Colors.CYAN}"
+                f"TARGET {target_idx}/{len(targets)}: "
+                f"{target['host']}:{target['port']}{Colors.RESET}"
+            )
+            self.emit_log(
+                f"{Colors.WHITE}   Service: {target['service_display']} | "
+                f"Risk: {target['risk'].upper()}{Colors.RESET}"
+            )
+            self.emit_log(f"{Colors.BOLD}{'-'*70}{Colors.RESET}")
+
+            for exploit_info in target['exploits']:
+                exploit_class = exploit_info['class']
+                exploit_name = exploit_info['name']
+
+                completed += 1
+                pct = int((completed / total) * 100) if total else 0
+                self.emit_progress(pct, f"Exploitation: {exploit_name}")
+
+                self.emit_log(
+                    f"\n  {Colors.BOLD}[{completed}/{total}] {exploit_name}"
+                    f"{Colors.RESET}"
+                )
+
+                try:
+                    exploit = self._instantiate_exploit(
+                        exploit_class, target['host'], target['port'], target
+                    )
+                    if exploit is None:
+                        self.emit_log(
+                            f"  {Colors.YELLOW}[-] Cannot instantiate (missing deps)"
+                            f"{Colors.RESET}"
+                        )
+                        continue
+
+                    self.emit_log(
+                        f"  {Colors.BLUE}[*] Checking vulnerability..."
+                        f"{Colors.RESET}"
+                    )
+                    try:
+                        is_vuln, reason = await asyncio.wait_for(
+                            exploit.check(), timeout=30
+                        )
+                    except asyncio.TimeoutError:
+                        self.emit_log(
+                            f"  {Colors.YELLOW}[-] Check timeout{Colors.RESET}"
+                        )
+                        continue
+
+                    if not is_vuln:
+                        self.emit_log(
+                            f"  {Colors.YELLOW}[-] {reason}{Colors.RESET}"
+                        )
+                        continue
+
+                    self.emit_log(
+                        f"  {Colors.GREEN}[+] Vulnerable: {reason}{Colors.RESET}"
+                    )
+
+                    self.emit_log(
+                        f"  {Colors.BLUE}[*] Running exploit...{Colors.RESET}"
+                    )
+                    try:
+                        result = await asyncio.wait_for(
+                            exploit.exploit(),
+                            timeout=getattr(self, 'exploit_timeout', 60),
+                        )
+                    except asyncio.TimeoutError:
+                        self.emit_log(
+                            f"  {Colors.YELLOW}[-] Exploit timeout{Colors.RESET}"
+                        )
+                        continue
+
+                    results.append(result)
+
+                    if result.success:
+                        self.emit_log(
+                            f"\n  {Colors.RED}{'='*50}{Colors.RESET}"
+                        )
+                        self.emit_log(
+                            f"  {Colors.BOLD}{Colors.RED}[+] EXPLOIT SUCCEEDED"
+                            f"{Colors.RESET}"
+                        )
+                        self.emit_log(
+                            f"  {Colors.RED}{'='*50}{Colors.RESET}"
+                        )
+                        self.emit_log(
+                            f"  {Colors.GREEN}{result.description}{Colors.RESET}"
+                        )
+
+                        if result.credentials:
+                            self.emit_log(
+                                f"  {Colors.RED}- Credentials: "
+                                f"{result.credentials[0]}:{result.credentials[1]}"
+                                f"{Colors.RESET}"
+                            )
+                        if result.shell_url:
+                            self.emit_log(
+                                f"  {Colors.CYAN}- Shell URL: {result.shell_url}"
+                                f"{Colors.RESET}"
+                            )
+
+                        self._record_exploit_success(target, exploit_name, result)
+                    else:
+                        self.emit_log(
+                            f"  {Colors.YELLOW}[-] Failed: "
+                            f"{result.error or result.description}{Colors.RESET}"
+                        )
+
+                except Exception as exc:
+                    self.emit_log(
+                        f"  {Colors.RED}[!] ERROR: {type(exc).__name__}: {exc}"
+                        f"{Colors.RESET}"
+                    )
+                    self.record_error(
+                        'exploit',
+                        f"{target['host']}:{target['port']}",
+                        exc,
+                    )
+
+        return results
+
+    def _instantiate_exploit(
+        self,
+        exploit_class: type,
+        host: str,
+        port: int,
+        target: Dict[str, Any],
+    ) -> Optional[Exploit]:
+        class_name = exploit_class.__name__
+
+        if class_name in ('SSHPrivilegeEscalation', 'SSHPersistence'):
+            creds = self._find_ssh_credentials(host, port)
+            if not creds:
+                self.emit_log(
+                    f"  {Colors.YELLOW}[-] No SSH credentials found for "
+                    f"{host}:{port}{Colors.RESET}"
+                )
+                return None
+            return exploit_class(host, port, credentials=creds)
+
+        if class_name in ('CommandInjectionExploit', 'SSTIExploit',
+                          'LFIExploit', 'SSRFExploit', 'JWTExploit'):
+            return exploit_class(host, port, path='/')
+
+        if class_name == 'FileUploadRCE':
+            return exploit_class(host, port, upload_path='/upload')
+
+        if class_name == 'XXEExploit':
+            return exploit_class(host, port, path='/')
+
+        if class_name == 'DeserializationExploit':
+            return exploit_class(host, port, path='/')
+
+        return exploit_class(host, port)
+
+    def _find_ssh_credentials(self, host: str, port: int) -> Optional[Tuple[str, str]]:
+        if hasattr(self, '_exploit_results_cache'):
+            key = f"{host}:{port}"
+            cached = self._exploit_results_cache.get(key)
+            if cached and cached.get('credentials'):
+                return tuple(cached['credentials'])
+
+        target_key = f"{host}:{port}"
+        vulns = self.results.get('vulnerabilities', {}).get(target_key, [])
+        for v in vulns:
+            if v.get('credentials'):
+                try:
+                    user, pwd = v['credentials']
+                    return (user, pwd)
+                except (TypeError, ValueError):
+                    continue
+
+        return None
+
+    def _record_exploit_success(
+        self,
+        target: Dict[str, Any],
+        exploit_name: str,
+        result: ExploitResult,
+    ):
+        """Enregistre un exploit réussi dans les vulnérabilités"""
+        target_key = f"{target['host']}:{target['port']}"
+
+        finding = {
+            'name': f"EXPLOIT SUCCEEDED: {exploit_name}",
+            'severity': 'critical',
+            'target': target_key,
+            'evidence': result.proof or result.description,
+            'recommendation': 'SYSTEM COMPROMISED - Immediate action required',
+            'exploit_details': result.as_dict() if hasattr(result, 'as_dict') else str(result),
         }
-        
-        if self.exploit_module != 'all':
-            allowed_services = {
-                'ssh': ['ssh'],
-                'web': ['http', 'https'],
-                'database': ['mysql', 'redis']
-            }.get(self.exploit_module, [])
-            
-            if allowed_services:
-                all_exploits = {k: v for k, v in all_exploits.items() if k in allowed_services}
-        
-        for host, services in self.results['services'].items():
+
+        existing = self.results.setdefault('vulnerabilities', {}).setdefault(target_key, [])
+        existing.append(finding)
+
+        current = self.results.setdefault('risks', {}).setdefault(
+            target_key, {'score': 'info', 'factors': []}
+        )
+        current['score'] = 'critical'
+
+        if result.credentials:
+            if not hasattr(self, '_exploit_results_cache'):
+                self._exploit_results_cache = {}
+            self._exploit_results_cache[target_key] = {
+                'credentials': result.credentials,
+            }
+
+    def _analyze_targets(self) -> List[Dict[str, Any]]:
+        targets: List[Dict[str, Any]] = []
+        seen: set[Tuple[str, int]] = set()
+
+        for host, services in self.results.get('services', {}).items():
             for port_str, service in services.items():
-                port = int(port_str)
-                service_name = service.get('name', '').lower()
-                
-                if service_name in all_exploits:
-                    target_key = f"{host}:{port}"
-                    existing_vulns = self.results['vulnerabilities'].get(target_key, [])
-                    risk_info = self.results['risks'].get(target_key, {})
-                    
-                    is_valid = True
-                    if service_name in ['http', 'https']:
-                        http_info = service.get('http', {})
-                        if not http_info.get('status'):
-                            is_valid = False
-                    
-                    if is_valid:
-                        targets.append({
-                            'host': host,
-                            'port': port,
-                            'service': service_name,
-                            'service_display': service.get('name', 'unknown'),
-                            'exploits': all_exploits[service_name],
-                            'vulns_count': len(existing_vulns),
-                            'risk': risk_info.get('score', 'info'),
-                            'banner': service.get('banner', '')[:50],
-                            'service_info': service
-                        })
-        
-        if self.exploit_targets:
-            target_list = self.exploit_targets.split(',')
-            filtered_targets = []
-            for t in targets:
-                target_str = f"{t['host']}:{t['port']}"
-                if target_str in target_list:
-                    filtered_targets.append(t)
-            targets = filtered_targets
-        
+                try:
+                    port = int(port_str)
+                except (TypeError, ValueError):
+                    continue
+
+                raw_name = (service.get('name') or '').lower()
+
+                service_name = self._normalize_service_name(raw_name, port)
+
+                if not service_name:
+                    continue
+
+                key = (host, port)
+                if key in seen:
+                    continue
+                seen.add(key)
+
+                exploit_classes = EXPLOIT_REGISTRY.get(service_name, [])
+                if not exploit_classes:
+                    continue
+
+                exploits = []
+                for cls in exploit_classes:
+                    if not self._exploit_dependencies_ok(cls):
+                        continue
+                    exploits.append({
+                        'class': cls,
+                        'name': getattr(cls, 'name', cls.__name__),
+                        'severity': getattr(cls, 'severity', 'info'),
+                    })
+
+                if not exploits:
+                    continue
+
+                target_key = f"{host}:{port}"
+                existing_vulns = self.results.get('vulnerabilities', {}).get(target_key, [])
+                risk_info = self.results.get('risks', {}).get(target_key, {})
+
+                targets.append({
+                    'host': host,
+                    'port': port,
+                    'service': service_name,
+                    'service_display': service.get('name', 'unknown'),
+                    'exploits': exploits,
+                    'vulns_count': len(existing_vulns),
+                    'risk': risk_info.get('score', 'info'),
+                    'banner': (service.get('banner') or '')[:60],
+                })
+
+        module_filter = getattr(self, 'exploit_module', 'all')
+        if module_filter and module_filter != 'all':
+            targets = [
+                t for t in targets
+                if self._service_in_module(t['service'], module_filter)
+            ]
+
+        if getattr(self, 'exploit_targets', None):
+            target_list = [
+                x.strip() for x in self.exploit_targets.split(',')
+                if x.strip()
+            ]
+            targets = [
+                t for t in targets
+                if f"{t['host']}:{t['port']}" in target_list
+            ]
+
         risk_order = {'critical': 0, 'high': 1, 'medium': 2, 'low': 3, 'info': 4}
-        targets.sort(key=lambda t: risk_order.get(t['risk'], 4))
-        
+        targets.sort(key=lambda t: (risk_order.get(t['risk'], 5), t['host'], t['port']))
+
         return targets
 
-    def _display_targets_summary(self, targets):
-        self.emit_log(f"\n{Colors.GREEN}[+] {len(targets)} exploitable target(s) detected:{Colors.RESET}\n")
-        
+    @staticmethod
+    def _normalize_service_name(raw_name: str, port: int) -> Optional[str]:
+        if raw_name in EXPLOIT_REGISTRY:
+            return raw_name
+
+        for svc in EXPLOIT_REGISTRY:
+            if svc in raw_name:
+                return svc
+
+        return PORT_TO_SERVICE.get(port)
+
+    @staticmethod
+    def _service_in_module(service: str, module: str) -> bool:
+        mapping = {
+            'ssh': ['ssh'],
+            'web': ['http', 'https'],
+            'database': ['mysql', 'postgresql', 'redis', 'mongodb'],
+        }
+        allowed = mapping.get(module, [])
+        return service in allowed
+
+    @staticmethod
+    def _exploit_dependencies_ok(cls: type) -> bool:
+        requires = getattr(cls, 'requires', []) or []
+        for dep in requires:
+            try:
+                __import__(dep)
+            except ImportError:
+                return False
+        return True
+
+    def _display_targets_summary(self, targets: List[Dict[str, Any]]):
+        self.emit_log(
+            f"\n{Colors.GREEN}[+] {len(targets)} exploitable target(s) detected:"
+            f"{Colors.RESET}\n"
+        )
+
         for i, target in enumerate(targets, 1):
             risk_color = {
                 'critical': Colors.RED,
                 'high': Colors.RED,
                 'medium': Colors.YELLOW,
                 'low': Colors.BLUE,
-                'info': Colors.WHITE
+                'info': Colors.WHITE,
             }.get(target['risk'], Colors.WHITE)
-            
-            self.emit_log(f"  {Colors.BOLD}{i}. {target['host']}:{target['port']}{Colors.RESET}")
-            self.emit_log(f"     Service: {target['service_display']}")
-            self.emit_log(f"     Risk: {risk_color}{target['risk'].upper()}{Colors.RESET}")
-            self.emit_log(f"     Known vulnerabilities: {target['vulns_count']}")
-            self.emit_log(f"     Banner: {target['banner']}")
-            self.emit_log(f"     Available exploits: {len(target['exploits'])}")
+
+            exploit_names = ', '.join(e['name'][:35] for e in target['exploits'][:3])
+            if len(target['exploits']) > 3:
+                exploit_names += f" (+{len(target['exploits']) - 3} more)"
+
+            self.emit_log(
+                f"  {Colors.BOLD}{i}. {target['host']}:{target['port']}{Colors.RESET} "
+                f"[{target['service']}]"
+            )
+            self.emit_log(
+                f"     Risk: {risk_color}{target['risk'].upper()}{Colors.RESET} | "
+                f"Vulns known: {target['vulns_count']} | "
+                f"Exploits: {len(target['exploits'])}"
+            )
+            self.emit_log(f"     → {exploit_names}")
             self.emit_log("")
 
     async def _execute_exploits(self, targets):
