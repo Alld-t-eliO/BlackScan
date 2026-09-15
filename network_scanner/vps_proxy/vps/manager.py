@@ -1,9 +1,7 @@
 from .ssh import SSHConnection
 from . import config
 
-
 class VPSManager:
-
     def __init__(self):
         self.ssh = None
 
