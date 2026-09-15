@@ -3,8 +3,18 @@ import socket
 import threading
 
 
-async def scan_port_async(ip, port, timeout=2):
+async def scan_port_async(ip, port, timeout=2, proxy_url=None):
     try:
+        if proxy_url:
+            from network_scanner.modules.socks_transport import SocksProxyError, open_socks_connection
+
+            try:
+                sock = await asyncio.wait_for(open_socks_connection(proxy_url, ip, port, timeout), timeout=timeout)
+            except SocksProxyError:
+                return False
+            sock.close()
+            return True
+
         future = asyncio.open_connection(ip, port)
         _reader, writer = await asyncio.wait_for(future, timeout=timeout)
         writer.close()
@@ -17,16 +27,15 @@ async def scan_port_async(ip, port, timeout=2):
         return False
 
 
-async def scan_ports_async(ip, ports, concurrency=100, timeout=2):
+async def scan_ports_async(ip, ports, concurrency=100, timeout=2, proxy_url=None):
     semaphore = asyncio.Semaphore(max(1, concurrency))
     open_ports = []
 
     async def bounded_scan(port):
         async with semaphore:
-            if await scan_port_async(ip, port, timeout):
+            if await scan_port_async(ip, port, timeout, proxy_url):
                 open_ports.append(port)
 
-    # Only create a bounded batch of tasks, even for a 65535-port scan.
     ports = iter(ports)
 
     async def worker():
@@ -49,13 +58,13 @@ def scan_port(ip, port, timeout=2):
             sock.close()
 
 
-def scan_ports(ip, ports, threads=100, timeout=2):
+def scan_ports(ip, ports, threads=100, timeout=2, proxy_url=None):
     if not ports:
         return []
     try:
         asyncio.get_running_loop()
     except RuntimeError:
-        return asyncio.run(scan_ports_async(ip, ports, threads, timeout))
+        return asyncio.run(scan_ports_async(ip, ports, threads, timeout, proxy_url))
 
     result = []
     error = None
@@ -63,8 +72,8 @@ def scan_ports(ip, ports, threads=100, timeout=2):
     def runner():
         nonlocal result, error
         try:
-            result = asyncio.run(scan_ports_async(ip, ports, threads, timeout))
-        except Exception as exc:  # noqa: BLE001 -- propagate worker failure to the caller
+            result = asyncio.run(scan_ports_async(ip, ports, threads, timeout, proxy_url))
+        except Exception as exc:
             error = exc
 
     thread = threading.Thread(target=runner)

@@ -4,7 +4,7 @@ def load_report(path):
     with open(path, encoding='utf-8') as handle:
         report = json.load(handle)
     if not isinstance(report, dict) or not isinstance(report.get('results'), dict):
-        raise ValueError(f'{path}: expected a BlackScan JSON report with a results object')  # noqa: TRY004 -- invalid file format
+        raise ValueError(f'{path}: expected a BlackScan JSON report with a results object')
     return report
 
 

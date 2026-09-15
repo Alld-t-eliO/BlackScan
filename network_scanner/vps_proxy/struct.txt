@@ -1,45 +1,103 @@
 BlackScan/
 │
-├── main.py
-├── configuration.py
+├── .github/
+│   ├── ISSUE_TEMPLATE/
+│   │   ├── bug_report.md
+│   │   └── feature_request.md
+│   └── workflows/
+│       └── ci.yml
+│
+├── config/
+│   └── exploit_config.yaml
+│
+├── docs/
+│   ├── images/
+│   │   ├── blackscan-home.png
+│   │   ├── blackscan-scan-example.png
+│   │   └── docs
+│   └── learning/
+│
+├── reports/
+│   └── generated scan reports
+│
+├── tests/
+│   ├── __init__.py
+│   └── test_scanner.py
 │
 ├── network_scanner/
-│   ├── ...
-│   ├──local.py
+│   ├── __init__.py
+│   ├── __main__.py
+│   ├── main.py
+│   ├── local.py
+│   ├── settings.py
+│   │
+│   ├── core/
+│   │   └── ui.py
+│   │
+│   ├── checks/
+│   │   ├── __init__.py
+│   │   ├── base.py
+│   │   └── builtin.py
+│   │
+│   ├── modules/
+│   │   ├── __init__.py
+│   │   ├── auto_exploit.py
+│   │   ├── external_tools.py
+│   │   ├── interactive.py
+│   │   ├── os_detection.py
+│   │   ├── ping_sweep.py
+│   │   ├── port_scanner.py
+│   │   ├── report_diff.py
+│   │   ├── risk.py
+│   │   ├── service_scan.py
+│   │   ├── vulnerability.py
+│   │   │
+│   │   └── brute_force/
+│   │       ├── __init__.py
+│   │       ├── base.py
+│   │       ├── ftp.py
+│   │       ├── http_basic.py
+│   │       ├── mysql.py
+│   │       └── ssh.py
+│   │
+│   ├── payloads/
+│   │   ├── __init__.py
+│   │   ├── base.py
+│   │   ├── payloads/
+│   │   └── exploits/
+│   │
+│   ├── scanner/
+│   │   ├── __init__.py
+│   │   ├── main.py
+│   │   ├── scan.py
+│   │   ├── parser.py
+│   │   ├── report.py
+│   │   └── comparaison.py
+│   │
+│   ├── utils/
+│   │   ├── logger.py
+│   │   └── utils.py
+│   │
+│   └── vps_proxy/
+│       ├── __init__.py
+│       ├── main.py
+│       │
+│       ├── local/
+│       │
+│       ├── proxy/
+│       │   ├── __init__.py
+│       │   ├── config.py
+│       │   └── manager.py
+│       │
+│       └── vps/
+│           ├── __init__.py
+│           ├── config.py
+│           ├── manager.py
+│           └── ssh.py
 │
-└── vps_proxy/
-    ├── __init__.py
-    ├── main.py             
-    │
-    ├── proxy/
-    │   ├── __init__.py
-    │   ├── config.py
-    │   └── manager.py      
-    │
-    ├── vps/
-    │   ├── __init__.py
-    │   ├── config.py
-    │   ├── ssh.sh          
-    │   └── manager.sh       
-
-
-
-
-                         BlackScan
-                            │
-                            ▼
-                  vps_proxy/main.py
-                            │
-              ┌─────────────┼─────────────┐
-              │             │             │
-            LOCAL         PROXY           VPS
-              │             │             │
-              │       Python/Proxy        │
-              │             │             │
-              │             ▼             │
-              │        ProxyManager        │
-              │                           │
-              │                      SSHManager
-              │                           │
-              ▼                           ▼
-           Scanner                    VPS
+├── README.md
+├── config.py
+├── install.sh
+├── pyproject.toml
+├── requirements.txt
+└── struct.txt

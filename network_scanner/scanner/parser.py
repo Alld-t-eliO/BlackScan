@@ -75,7 +75,6 @@ def mask_proxy_url(value):
 
 def build_parser():
     parser = argparse.ArgumentParser(description='BlackScan network scanner')
-
     parser.add_argument('-t', '--target', help='Target: IP, DNS name, or CIDR range')
     parser.add_argument('--threads', type=positive_int, default=100)
     parser.add_argument('--timeout', type=positive_int, default=2)
@@ -96,13 +95,11 @@ def build_parser():
     parser.add_argument('--skip-discovery', action='store_true')
     parser.add_argument('--no-external-enrichment', action='store_true')
     parser.add_argument('--external-timeout', type=positive_int, default=120)
-
     parser.add_argument(
         '--authorized',
         action='store_true',
         help='(optional, deprecated) Mark scan as authorized',
     )
-
     exploit_group = parser.add_argument_group('Exploitation Phase')
     exploit_group.add_argument('--exploit', action='store_true')
     exploit_group.add_argument('--exploit-timeout', type=positive_int, default=60)

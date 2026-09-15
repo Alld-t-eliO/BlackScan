@@ -1,4 +1,5 @@
 import hashlib
+import http.client
 import ipaddress
 import os
 import socket
@@ -7,7 +8,9 @@ import tempfile
 from html.parser import HTMLParser
 from urllib.error import HTTPError, URLError
 from urllib.parse import urljoin, urlsplit
-from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
+from urllib.request import HTTPRedirectHandler, HTTPHandler, HTTPSHandler, ProxyHandler, Request, build_opener
+
+from network_scanner.modules.socks_transport import SocksProxyError, socks_connect
 
 
 def web_url(host, port, scheme):
@@ -70,7 +73,61 @@ class TitleParser(HTMLParser):
         return " ".join(part for part in self.parts if part)[:120]
 
 
-def detect_service(ip, port, timeout=2, proxy_url=None):
+# --- SOCKS-aware socket/HTTP plumbing -----------------------------------------------------
+
+class SocksHTTPConnection(http.client.HTTPConnection):
+    socks_proxy_url = None
+
+    def connect(self):
+        self.sock = socks_connect(self.socks_proxy_url, self.host, self.port, self.timeout)
+
+
+class SocksHTTPSConnection(http.client.HTTPSConnection):
+    socks_proxy_url = None
+
+    def connect(self):
+        raw_sock = socks_connect(self.socks_proxy_url, self.host, self.port, self.timeout)
+        context = self._context or ssl.create_default_context()
+        self.sock = context.wrap_socket(raw_sock, server_hostname=self.host)
+
+
+class SocksHTTPHandler(HTTPHandler):
+    def __init__(self, socks_proxy_url):
+        super().__init__()
+        self.socks_proxy_url = socks_proxy_url
+
+    def http_open(self, req):
+        def build(*args, **kwargs):
+            conn = SocksHTTPConnection(*args, **kwargs)
+            conn.socks_proxy_url = self.socks_proxy_url
+            return conn
+        return self.do_open(build, req)
+
+
+class SocksHTTPSHandler(HTTPSHandler):
+    def __init__(self, socks_proxy_url, context=None):
+        super().__init__(context=context)
+        self.socks_proxy_url = socks_proxy_url
+
+    def https_open(self, req):
+        def build(*args, **kwargs):
+            conn = SocksHTTPSConnection(*args, **kwargs, context=self._context)
+            conn.socks_proxy_url = self.socks_proxy_url
+            return conn
+        return self.do_open(build, req)
+
+
+def raw_connect(ip, port, timeout=2, socks_proxy_url=None):
+    """Open a raw connected socket, transparently via SOCKS5 if configured."""
+    if socks_proxy_url:
+        return socks_connect(socks_proxy_url, ip, port, timeout)
+    return socket.create_connection((ip, port), timeout=timeout)
+
+
+# --------------------------------------------------------------------------------------------
+
+
+def detect_service(ip, port, timeout=2, proxy_url=None, socks_proxy_url=None):
     service_info = {
         'name': COMMON_PORTS.get(port, 'unknown'),
         'banner': '',
@@ -80,7 +137,7 @@ def detect_service(ip, port, timeout=2, proxy_url=None):
     }
 
     if port in HTTP_PORTS or port in HTTPS_PORTS:
-        service_info['http'] = detect_http(ip, port, timeout, proxy_url)
+        service_info['http'] = detect_http(ip, port, timeout, proxy_url, socks_proxy_url)
         if service_info['http'].get('error'):
             service_info['errors'].append(service_info['http']['error'])
         if service_info['http'].get('status'):
@@ -88,23 +145,21 @@ def detect_service(ip, port, timeout=2, proxy_url=None):
             service_info['banner'] = service_info['http'].get('server', '')
 
     if port in HTTPS_PORTS:
-        service_info['tls'] = detect_tls(ip, port, timeout)
+        service_info['tls'] = detect_tls(ip, port, timeout, socks_proxy_url)
 
-    # HTTP servers wait for a request, and TLS sockets wait for a handshake.
-    # A second passive connection adds only delay and cannot provide a banner.
     if port in HTTP_PORTS | HTTPS_PORTS:
         return service_info
 
     sock = None
 
     try:
-        sock = socket.create_connection((ip, port), timeout=timeout)
+        sock = raw_connect(ip, port, timeout, socks_proxy_url)
         if port in HTTP_PORTS and not service_info['http']:
             sock.sendall(b'HEAD / HTTP/1.0\r\n\r\n')
         banner = sock.recv(1024).decode('utf-8', errors='ignore')
         if banner:
             service_info['banner'] = banner[:200]
-    except OSError:
+    except (OSError, SocksProxyError):
         pass
     finally:
         if sock:
@@ -121,21 +176,21 @@ def detect_service(ip, port, timeout=2, proxy_url=None):
             service_info['name'] = 'FTP'
 
     if not service_info['banner'] and port not in COMMON_PORTS:
-        http = detect_http(ip, port, timeout, proxy_url)
-        if http.get('status'):
-            service_info.update(name='HTTP', http=http, banner=http.get('server', ''))
+        http_info = detect_http(ip, port, timeout, proxy_url, socks_proxy_url)
+        if http_info.get('status'):
+            service_info.update(name='HTTP', http=http_info, banner=http_info.get('server', ''))
     return service_info
 
 
-def detect_http(ip, port, timeout=2, proxy_url=None):
+def detect_http(ip, port, timeout=2, proxy_url=None, socks_proxy_url=None):
     scheme = 'https' if port in HTTPS_PORTS else 'http'
     url = web_url(ip, port, scheme)
     try:
-        redirects = fetch_redirects(url, timeout, proxy_url=proxy_url)
+        redirects = fetch_redirects(url, timeout, proxy_url=proxy_url, socks_proxy_url=socks_proxy_url)
         request = Request(url, headers={'User-Agent': 'BlackScan/1.0'})
         response = None
         try:
-            response = open_url(request, timeout, proxy_url)
+            response = open_url(request, timeout, proxy_url, socks_proxy_url)
         except HTTPError as exc:
             response = exc
         try:
@@ -148,7 +203,7 @@ def detect_http(ip, port, timeout=2, proxy_url=None):
             return {
                 'url': url,
                 'status': getattr(response, 'status', None) or getattr(response, 'code', 0),
-                'proxy': redact_proxy(proxy_url),
+                'proxy': redact_proxy(socks_proxy_url or proxy_url),
                 'final_url': response.geturl() if hasattr(response, 'geturl') else url,
                 'redirects': redirects,
                 'server': normalized_headers.get('server', ''),
@@ -160,15 +215,15 @@ def detect_http(ip, port, timeout=2, proxy_url=None):
                 'headers': headers,
                 'security_headers': summarize_security_headers(headers),
                 'cookies': cookies,
-                'favicon_hash': fetch_favicon_hash(url, timeout, proxy_url=proxy_url),
+                'favicon_hash': fetch_favicon_hash(url, timeout, proxy_url=proxy_url, socks_proxy_url=socks_proxy_url),
                 'technologies': detect_technologies(headers, body),
-                'common_paths': probe_common_paths(url, timeout, proxy_url=proxy_url),
-                'sensitive_paths': probe_paths(url, SENSITIVE_WEB_PATHS, timeout, proxy_url=proxy_url),
+                'common_paths': probe_common_paths(url, timeout, proxy_url=proxy_url, socks_proxy_url=socks_proxy_url),
+                'sensitive_paths': probe_paths(url, SENSITIVE_WEB_PATHS, timeout, proxy_url=proxy_url, socks_proxy_url=socks_proxy_url),
             }
         finally:
             if response:
                 response.close()
-    except (OSError, URLError, ValueError, ssl.SSLError) as exc:
+    except (OSError, URLError, ValueError, ssl.SSLError, SocksProxyError) as exc:
         return {'url': url, 'error': f'HTTP collection failed: {type(exc).__name__}'}
 
 
@@ -191,30 +246,30 @@ class NoRedirectHandler(HTTPRedirectHandler):
         return None
 
 
-def open_url(request, timeout=2, proxy_url=None):
-    opener = build_proxy_opener(proxy_url)
+def open_url(request, timeout=2, proxy_url=None, socks_proxy_url=None):
+    opener = build_proxy_opener(proxy_url, socks_proxy_url)
     return opener.open(request, timeout=timeout)
 
 
-def build_proxy_opener(proxy_url):
-    return build_opener(ScopedRedirectHandler(), *http_handlers(proxy_url))
+def build_proxy_opener(proxy_url, socks_proxy_url=None):
+    return build_opener(ScopedRedirectHandler(), *http_handlers(proxy_url, socks_proxy_url))
 
 
-def http_handlers(proxy_url=None):
-    # Explicit empty proxies prevent environment variables from changing the selected route.
-    handlers = [ProxyHandler({'http': proxy_url, 'https': proxy_url} if proxy_url else {})]
-    return handlers
+def http_handlers(proxy_url=None, socks_proxy_url=None):
+    if socks_proxy_url:
+        return [SocksHTTPHandler(socks_proxy_url), SocksHTTPSHandler(socks_proxy_url)]
+    return [ProxyHandler({'http': proxy_url, 'https': proxy_url} if proxy_url else {})]
 
 
-def build_no_redirect_opener(proxy_url=None):
-    handlers = [NoRedirectHandler(), *http_handlers(proxy_url)]
+def build_no_redirect_opener(proxy_url=None, socks_proxy_url=None):
+    handlers = [NoRedirectHandler(), *http_handlers(proxy_url, socks_proxy_url)]
     return build_opener(*handlers)
 
 
-def fetch_redirects(url, timeout=2, limit=5, proxy_url=None):
+def fetch_redirects(url, timeout=2, limit=5, proxy_url=None, socks_proxy_url=None):
     redirects = []
     current_url = url
-    opener = build_no_redirect_opener(proxy_url)
+    opener = build_no_redirect_opener(proxy_url, socks_proxy_url)
 
     for _ in range(limit):
         try:
@@ -236,7 +291,7 @@ def fetch_redirects(url, timeout=2, limit=5, proxy_url=None):
             if urlsplit(next_url).hostname != urlsplit(url).hostname:
                 break
             current_url = next_url
-        except OSError:
+        except (OSError, SocksProxyError):
             break
 
     return redirects
@@ -279,15 +334,15 @@ def summarize_security_headers(headers):
     }
 
 
-def fetch_favicon_hash(base_url, timeout=2, proxy_url=None):
+def fetch_favicon_hash(base_url, timeout=2, proxy_url=None, socks_proxy_url=None):
     try:
         request = Request(urljoin(base_url, '/favicon.ico'), headers={'User-Agent': 'BlackScan/1.0'})
-        with open_url(request, timeout, proxy_url) as response:
+        with open_url(request, timeout, proxy_url, socks_proxy_url) as response:
             data = response.read(65536)
         if not data:
             return ''
         return hashlib.sha256(data).hexdigest()
-    except (OSError, URLError, ValueError):
+    except (OSError, URLError, ValueError, SocksProxyError):
         return ''
 
 
@@ -311,13 +366,13 @@ def detect_technologies(headers, body):
     return sorted(name for name, needles in signatures.items() if any(needle in haystack for needle in needles))
 
 
-def probe_common_paths(base_url, timeout=2, proxy_url=None):
-    return probe_paths(base_url, COMMON_WEB_PATHS, timeout, proxy_url=proxy_url)
+def probe_common_paths(base_url, timeout=2, proxy_url=None, socks_proxy_url=None):
+    return probe_paths(base_url, COMMON_WEB_PATHS, timeout, proxy_url=proxy_url, socks_proxy_url=socks_proxy_url)
 
 
-def probe_paths(base_url, paths, timeout=2, proxy_url=None):
+def probe_paths(base_url, paths, timeout=2, proxy_url=None, socks_proxy_url=None):
     results = []
-    opener = build_no_redirect_opener(proxy_url)
+    opener = build_no_redirect_opener(proxy_url, socks_proxy_url)
     for path in paths:
         url = urljoin(base_url, path)
         try:
@@ -325,14 +380,13 @@ def probe_paths(base_url, paths, timeout=2, proxy_url=None):
             with opener.open(request, timeout=timeout) as response:
                 status = response.status
                 content_type = response.headers.get('Content-Type', '').lower()
-                # File exposure must have file-like evidence, not just a wildcard 200 page.
                 body = response.read(2048) if path in SENSITIVE_WEB_PATHS else b''
         except URLError as exc:
             status = getattr(exc, 'code', 0) or 0
             body, content_type = b'', ''
             if isinstance(exc, HTTPError):
                 exc.close()
-        except OSError:
+        except (OSError, SocksProxyError):
             status = 0
             body, content_type = b'', ''
 
@@ -363,7 +417,7 @@ def sensitive_content(path, body, content_type):
     return path == '/config.php.bak' and '<?php' in text
 
 
-def detect_tls(ip, port, timeout=2):
+def detect_tls(ip, port, timeout=2, socks_proxy_url=None):
     tls_info = {
         'sha256_fingerprint': '',
         'not_before': '',
@@ -378,31 +432,33 @@ def detect_tls(ip, port, timeout=2):
     }
 
     try:
-        pem_cert = ssl.get_server_certificate((ip, port), timeout=timeout)
-        der_cert = ssl.PEM_cert_to_DER_cert(pem_cert)
+        raw_sock = raw_connect(ip, port, timeout, socks_proxy_url)
+        no_verify_context = ssl.create_default_context()
+        no_verify_context.check_hostname = False
+        no_verify_context.verify_mode = ssl.CERT_NONE
+        with no_verify_context.wrap_socket(raw_sock, server_hostname=ip) as tls_sock:
+            der_cert = tls_sock.getpeercert(binary_form=True)
         tls_info['sha256_fingerprint'] = hashlib.sha256(der_cert).hexdigest()
-    except (OSError, ssl.SSLError, ValueError):
+    except (OSError, ssl.SSLError, ValueError, SocksProxyError):
         return tls_info
 
-    verification = verify_tls_identity(ip, port, timeout)
+    verification = verify_tls_identity(ip, port, timeout, socks_proxy_url)
     tls_info['verification'] = verification
     tls_info['not_before'] = verification.pop('not_before', '')
     tls_info['not_after'] = verification.pop('not_after', '')
     if not tls_info['not_before'] or not tls_info['not_after']:
-        decoded = decode_pem_certificate(pem_cert)
+        decoded = decode_der_certificate(der_cert)
         tls_info['not_before'] = decoded.get('notBefore', '')
         tls_info['not_after'] = decoded.get('notAfter', '')
 
     return tls_info
 
 
-def verify_tls_identity(hostname, port, timeout=2):
+def verify_tls_identity(hostname, port, timeout=2, socks_proxy_url=None):
     context = ssl.create_default_context()
     try:
-        with socket.create_connection((hostname, port), timeout=timeout) as sock, context.wrap_socket(
-            sock,
-            server_hostname=hostname,
-        ) as tls_sock:
+        raw_sock = raw_connect(hostname, port, timeout, socks_proxy_url)
+        with context.wrap_socket(raw_sock, server_hostname=hostname) as tls_sock:
             cert = tls_sock.getpeercert()
             return {
                 'verified': True,
@@ -415,7 +471,7 @@ def verify_tls_identity(hostname, port, timeout=2):
                 'version': tls_sock.version(),
                 'cipher': tls_sock.cipher(),
             }
-    except (OSError, ssl.SSLError, ValueError) as exc:
+    except (OSError, ssl.SSLError, ValueError, SocksProxyError) as exc:
         return {
             'verified': False,
             'identity_checked': True,
@@ -425,13 +481,14 @@ def verify_tls_identity(hostname, port, timeout=2):
         }
 
 
-def verify_tls_hostname(hostname, port, timeout=2):
-    return verify_tls_identity(hostname, port, timeout)
+def verify_tls_hostname(hostname, port, timeout=2, socks_proxy_url=None):
+    return verify_tls_identity(hostname, port, timeout, socks_proxy_url)
 
 
-def decode_pem_certificate(pem_cert):
+def decode_der_certificate(der_cert):
     temp_name = ''
     try:
+        pem_cert = ssl.DER_cert_to_PEM_cert(der_cert)
         with tempfile.NamedTemporaryFile('w', encoding='utf-8', delete=False) as handle:
             temp_name = handle.name
             handle.write(pem_cert)
