@@ -377,24 +377,19 @@ class NetworkScanner(ReportMixin):
         self.emit_log(f"{Colors.BOLD}{Colors.RED}{'='*70}{Colors.RESET}")
         self.emit_log(f"{Colors.YELLOW}  [WARNING] Only run on authorized targets{Colors.RESET}")
 
-        if not self.intrusive_checks:
-            self.emit_log(
-                f"\n{Colors.RED}[!] Exploitation requires --intrusive-checks{Colors.RESET}"
-            )
-            return []
-
         missing = []
         for dep in ('paramiko', 'aiohttp'):
             try:
                 __import__(dep)
             except ImportError:
-                missing.append(f"{dep} (pip install {dep})")
+                missing.append(dep)
 
         if missing:
-            self.emit_log(f"\n{Colors.RED}[!] Missing dependencies:{Colors.RESET}")
-            for dep in missing:
-                self.emit_log(f"    - {dep}")
-            return []
+            self.emit_log(
+                f"{Colors.YELLOW}[!] Optional dependencies missing: "
+                f"{', '.join(missing)}. "
+                f"Some exploits will be skipped.{Colors.RESET}"
+            )
 
         self.emit_log(f"\n{Colors.BLUE}[*] Analyzing exploitable targets...{Colors.RESET}")
         targets = self._analyze_targets()

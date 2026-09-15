@@ -79,9 +79,6 @@ def main():
     if not args.target:
         parser.error("required argument: -t/--target")
 
-    if not args.authorized:
-        parser.error("add --authorized to confirm that the target is in your authorized scope")
-
     try:
         ports = parse_ports(args.ports) if args.ports else None
         proxy_url = validate_proxy_url(args.proxy)

@@ -74,61 +74,44 @@ def mask_proxy_url(value):
 
 
 def build_parser():
-    parser = argparse.ArgumentParser(description='BlackScan network vulnerability scanner')
-    
-    parser.add_argument('-t', '--target', help='Authorized target: IP, DNS name, or CIDR range')
-    parser.add_argument('--threads', type=positive_int, default=100, help='Number of worker threads/concurrent tasks (default: 100)')
-    parser.add_argument('--timeout', type=positive_int, default=2, help='Timeout in seconds (default: 2)')
-    parser.add_argument('-a', '--aggressive', action='store_true', help='Aggressive mode: wider ports and additional checks')
-    parser.add_argument('--profile', choices=sorted(settings.SCAN_PROFILES), default='quick', help='Scan profile (default: quick)')
-    parser.add_argument('--ports', help='Ports to scan, for example: 22,80,443,8000-8100')
-    parser.add_argument('-o', '--output-dir', default='reports', help='Report output directory')
-    parser.add_argument('--max-hosts', type=positive_int, default=4096, help='Maximum number of addresses allowed in a CIDR range')
-    parser.add_argument('--host-workers', type=positive_int, default=10, help='Maximum hosts scanned in parallel')
-    parser.add_argument('--service-workers', type=positive_int, default=32, help='Maximum services fingerprinted in parallel per host')
-    parser.add_argument('--proxy', help='HTTP(S) proxy URL used for HTTP/HTTPS fingerprinting requests')
-    parser.add_argument('--compare', help='Previous JSON report to compare with the new scan')
-    parser.add_argument('--trend', nargs='+', help='Analyze vulnerability evolution across JSON reports')
+    parser = argparse.ArgumentParser(description='BlackScan network scanner')
+
+    parser.add_argument('-t', '--target', help='Target: IP, DNS name, or CIDR range')
+    parser.add_argument('--threads', type=positive_int, default=100)
+    parser.add_argument('--timeout', type=positive_int, default=2)
+    parser.add_argument('-a', '--aggressive', action='store_true')
+    parser.add_argument('--profile', choices=sorted(settings.SCAN_PROFILES), default='quick')
+    parser.add_argument('--ports')
+    parser.add_argument('-o', '--output-dir', default='reports')
+    parser.add_argument('--max-hosts', type=positive_int, default=4096)
+    parser.add_argument('--host-workers', type=positive_int, default=10)
+    parser.add_argument('--service-workers', type=positive_int, default=32)
+    parser.add_argument('--proxy')
+    parser.add_argument('--compare')
+    parser.add_argument('--trend', nargs='+')
+    parser.add_argument('--tui', nargs='?', const='latest')
+    parser.add_argument('--list-external-tools', action='store_true')
+    parser.add_argument('--external-enrichment', action='store_true')
+    parser.add_argument('--intrusive-checks', action='store_true')
+    parser.add_argument('--skip-discovery', action='store_true')
+    parser.add_argument('--no-external-enrichment', action='store_true')
+    parser.add_argument('--external-timeout', type=positive_int, default=120)
+
     parser.add_argument(
-        '--tui',
-        nargs='?',
-        const='latest',
-        help='Open the interactive TUI, or pass a JSON report path to open the report viewer directly',
+        '--authorized',
+        action='store_true',
+        help='(optional, deprecated) Mark scan as authorized',
     )
-    parser.add_argument('--list-external-tools', action='store_true', help='List available external integrations')
-    parser.add_argument('--external-enrichment', action='store_true', help='Run available external tools and include their output in reports')
-    parser.add_argument('--intrusive-checks', action='store_true', help='Enable checks that attempt application-level interactions')
-    parser.add_argument('--authorized', action='store_true', help='Confirm that you are authorized to scan the target')
-    parser.add_argument('--skip-discovery', action='store_true', help='Scan every target even when discovery probes fail')
-    parser.add_argument('--no-external-enrichment', action='store_true', help='Disable external tools, including for full scans')
-    parser.add_argument('--external-timeout', type=positive_int, default=120, help='Maximum seconds per external command (default: 120)')
-    
+
     exploit_group = parser.add_argument_group('Exploitation Phase')
-    exploit_group.add_argument(
-        '--exploit',
-        action='store_true',
-        help='Enable the automatic exploitation phase after the scan (requires --intrusive-checks)'
-    )
-    exploit_group.add_argument(
-        '--exploit-timeout',
-        type=positive_int,
-        default=60,
-        help='Timeout per exploit in seconds (default: 60)'
-    )
-    exploit_group.add_argument(
-        '--exploit-targets',
-        help='Specific targets in host1:port1,host2:port2 format (for example: 192.168.1.100:22,192.168.1.100:80)'
-    )
-    exploit_group.add_argument(
-        '--exploit-auto-confirm',
-        action='store_true',
-        help='Automatically confirm the exploitation phase without prompting'
-    )
+    exploit_group.add_argument('--exploit', action='store_true')
+    exploit_group.add_argument('--exploit-timeout', type=positive_int, default=60)
+    exploit_group.add_argument('--exploit-targets')
+    exploit_group.add_argument('--exploit-auto-confirm', action='store_true', default=True)  # ← défaut à True
     exploit_group.add_argument(
         '--exploit-module',
         choices=['ssh', 'web', 'database', 'all'],
         default='all',
-        help='Exploitation module to use (default: all)'
     )
-    
+
     return parser
