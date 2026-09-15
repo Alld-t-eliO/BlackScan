@@ -1,6 +1,5 @@
 import json
 import sys
-
 from network_scanner.core import ui
 from network_scanner.modules import external_tools
 from network_scanner.scanner.comparaison import generate_trend_reports
@@ -108,6 +107,11 @@ def main():
             skip_discovery=args.skip_discovery,
             no_external_enrichment=args.no_external_enrichment,
             external_timeout=args.external_timeout,
+            exploit_mode=args.exploit,
+            exploit_timeout=args.exploit_timeout,
+            exploit_targets=args.exploit_targets,
+            exploit_auto_confirm=args.exploit_auto_confirm,
+            epxloit_module=args.exploit_module,
         )
     except ValueError as exc:
         parser.error(str(exc))
