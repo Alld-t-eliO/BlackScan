@@ -1,4 +1,3 @@
-
 try:
     import curses
 except ImportError:  
@@ -845,7 +844,8 @@ def _run_scan_session(stdscr, options):
 
     def worker():
         try:
-            from network_scanner.scanner import NetworkScanner, parse_ports, validate_proxy_url
+            from network_scanner.scanner.scan import NetworkScanner
+            from network_scanner.scanner.parser import parse_ports, validate_proxy_url
 
             ports = parse_ports(options['ports']) if options['ports'] else None
             proxy_url = validate_proxy_url(options['proxy'])
@@ -872,7 +872,7 @@ def _run_scan_session(stdscr, options):
             )
             result['reports'] = scanner.scan_network()
             events.put(('done', None, None))
-        except Exception as exc:  # noqa: BLE001 -- report worker errors to the foreground UI
+        except Exception as exc:
             events.put(('error', str(exc), None))
 
     thread = threading.Thread(target=worker, daemon=True)
