@@ -1,4 +1,4 @@
-BlackScan
+
 
 BlackScan is an authorized network security scanner written in Python for infrastructure where you have explicit permission to scan.
 
