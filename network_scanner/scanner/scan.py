@@ -2,7 +2,9 @@ import asyncio
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
-from network_scanner.payloads.exploits import (list_exploits, Exploit,)
+from typing import Any, Dict, List, Optional, Tuple
+
+from network_scanner.payloads.exploits import (list_exploits, Exploit, ExploitResult,)
 from network_scanner.payloads.exploits.ssh.auth_bypass import (SSHAuthBypass, SSHEmptyPasswordExploit, SSHUsernameEnumerator,)
 from network_scanner.payloads.exploits.ssh.privilege_escalation import (SSHPrivilegeEscalation,)
 from network_scanner.payloads.exploits.ssh.persistence import (SSHPersistence,)
@@ -106,9 +108,10 @@ class NetworkScanner(ReportMixin):
         external_timeout=120,
         exploit_mode=True,
         exploit_timeout=60,
-        exploit_targets=True,
+        exploit_targets=None,
         exploit_auto_confirm=True,
         exploit_module='all',
+        socks_proxy_url=None,
     ):
         self.target = validate_target(target)
         for label, value, limit in (
@@ -139,6 +142,7 @@ class NetworkScanner(ReportMixin):
         self.host_workers = max(1, host_workers)
         self.service_workers = max(1, service_workers)
         self.proxy_url = proxy_url
+        self.socks_proxy_url = socks_proxy_url
         self.external_enrichment = not no_external_enrichment and bool(external_enrichment or aggressive or self.profile == 'full')
         self.skip_discovery = skip_discovery
         self.external_timeout = external_timeout
@@ -292,7 +296,9 @@ class NetworkScanner(ReportMixin):
 
     def scan_host(self, host):
         self.emit_log(f"\n{Colors.CYAN}[*] Scanning {host}{Colors.RESET}")
-        open_ports = port_scanner.scan_ports(host, self.ports, self.threads, self.timeout)
+        open_ports = port_scanner.scan_ports(
+            host, self.ports, self.threads, self.timeout, proxy_url=self.socks_proxy_url,
+        )
 
         host_result = {
             'open_ports': open_ports,
@@ -333,7 +339,9 @@ class NetworkScanner(ReportMixin):
         return host_result
 
     def scan_service(self, host, port):
-        service = service_scan.detect_service(host, port, self.timeout, self.proxy_url)
+        service = service_scan.detect_service(
+            host, port, self.timeout, self.proxy_url, socks_proxy_url=self.socks_proxy_url,
+        )
         service['check_timeout'] = self.timeout
 
         service_name = service.get('name', 'unknown')
@@ -367,7 +375,7 @@ class NetworkScanner(ReportMixin):
             current = self.results['risks'].setdefault(target, {'score': 'info', 'factors': []})
             current['score'] = risk.max_severity([current['score'], finding['severity']])
 
-     async def run_exploit_phase(self) -> List[ExploitResult]:
+    async def run_exploit_phase(self) -> List[ExploitResult]:
         from datetime import datetime
 
         start_time = datetime.now()
@@ -781,141 +789,6 @@ class NetworkScanner(ReportMixin):
             )
             self.emit_log(f"     → {exploit_names}")
             self.emit_log("")
-
-    async def _execute_exploits(self, targets):
-        results = []
-        total_exploits = sum(len(t['exploits']) for t in targets)
-        completed = 0
-        successful_exploits = []
-        failed_exploits = []
-        
-        self.emit_log(f"{Colors.BLUE}[*] Starting {total_exploits} exploitation attempt(s)...{Colors.RESET}\n")
-        self.emit_log(f"{Colors.BOLD}{'─'*70}{Colors.RESET}")
-        
-        for target_idx, target in enumerate(targets, 1):
-            self.emit_log(f"\n{Colors.BOLD}{Colors.CYAN}🎯 TARGET {target_idx}/{len(targets)}: {target['host']}:{target['port']}{Colors.RESET}")
-            self.emit_log(f"{Colors.WHITE}   Service: {target['service_display']} | Risk: {target['risk'].upper()}{Colors.RESET}")
-            self.emit_log(f"{Colors.BOLD}{'─'*70}{Colors.RESET}")
-            
-            for exploit_info in target['exploits']:
-                exploit_class = exploit_info['class']
-                exploit_name = exploit_info['name']
-                severity = exploit_info['severity']
-                
-                completed += 1
-                progress_pct = int((completed / total_exploits) * 100)
-                
-                self.emit_progress(progress_pct, f"Exploitation: {exploit_name}")
-                
-                self.emit_log(f"\n  {Colors.BOLD}[{completed}/{total_exploits}] {exploit_name}{Colors.RESET}")
-                self.emit_log(f"  {Colors.WHITE}  Severity: {severity.upper()} | Progress: {progress_pct}%{Colors.RESET}")
-                
-                try:
-                    exploit = exploit_class(target['host'], target['port'])
-                    
-                    self.emit_log(f"  {Colors.BLUE}[*] Checking vulnerability...{Colors.RESET}")
-                    is_vuln, reason = await asyncio.wait_for(
-                        exploit.check(),
-                        timeout=30
-                    )
-                    
-                    if not is_vuln:
-                        self.emit_log(f"  {Colors.YELLOW}[-] Not vulnerable: {reason}{Colors.RESET}")
-                        failed_exploits.append({
-                            'target': f"{target['host']}:{target['port']}",
-                            'exploit': exploit_name,
-                            'reason': reason,
-                            'status': 'not_vulnerable'
-                        })
-                        continue
-                    
-                    self.emit_log(f"  {Colors.GREEN}[+] Vulnerability confirmed!{Colors.RESET}")
-                    self.emit_log(f"  {Colors.BLUE}[*] Starting exploitation...{Colors.RESET}")
-                    
-                    result = await asyncio.wait_for(
-                        exploit.exploit(),
-                        timeout=self.exploit_timeout
-                    )
-                    
-                    results.append(result)
-                    
-                    if result.success:
-                        self.emit_log(f"\n  {Colors.RED}{'='*50}{Colors.RESET}")
-                        self.emit_log(f"  {Colors.BOLD}{Colors.RED}[+] EXPLOIT SUCCEEDED{Colors.RESET}")
-                        self.emit_log(f"  {Colors.RED}{'='*50}{Colors.RESET}")
-                        self.emit_log(f"  {Colors.GREEN}✓ {result.description}{Colors.RESET}")
-                        
-                        if result.credentials:
-                            self.emit_log(f"  {Colors.RED}- Credentials: {result.credentials[0]}:{result.credentials[1]}{Colors.RESET}")
-                        
-                        if result.shell_url:
-                            self.emit_log(f"  {Colors.CYAN}- Shell URL: {result.shell_url}{Colors.RESET}")
-                        
-                        if result.proof:
-                            self.emit_log(f"  {Colors.WHITE}- Evidence: {result.proof[:300]}{Colors.RESET}")
-                        
-                        target_key = f"{target['host']}:{target['port']}"
-                        exploit_finding = {
-                            'name': f"EXPLOIT SUCCEEDED: {exploit_name}",
-                            'severity': 'critical',
-                            'target': target_key,
-                            'evidence': result.proof or str(result.output),
-                            'recommendation': '[SUCCESS] SYSTEM COMPROMISED - Immediate action required',
-                            'exploit_details': result.as_dict()
-                        }
-                        
-                        existing = self.results['vulnerabilities'].get(target_key, [])
-                        if exploit_finding not in existing:
-                            self.results['vulnerabilities'].setdefault(target_key, []).append(exploit_finding)
-                        
-                        current_risk = self.results['risks'].get(target_key, {'score': 'info', 'factors': []})
-                        current_risk['score'] = 'critical'
-                        self.results['risks'][target_key] = current_risk
-                        
-                        successful_exploits.append({
-                            'target': f"{target['host']}:{target['port']}",
-                            'exploit': exploit_name,
-                            'credentials': result.credentials,
-                            'shell_url': result.shell_url,
-                            'proof': result.proof[:200]
-                        })
-                        
-                    else:
-                        self.emit_log(f"  {Colors.YELLOW}[-] Exploitation failed: {result.error or 'Unknown reason'}{Colors.RESET}")
-                        failed_exploits.append({
-                            'target': f"{target['host']}:{target['port']}",
-                            'exploit': exploit_name,
-                            'reason': result.error or 'Unknown failure',
-                            'status': 'failed'
-                        })
-                    
-                except asyncio.TimeoutError:
-                    self.emit_log(f"  {Colors.RED}[!] TIMEOUT - Exploitation exceeded the time limit{Colors.RESET}")
-                    failed_exploits.append({
-                        'target': f"{target['host']}:{target['port']}",
-                        'exploit': exploit_name,
-                        'reason': 'Timeout (60s)',
-                        'status': 'timeout'
-                    })
-                    
-                except Exception as e:
-                    self.emit_log(f"  {Colors.RED}[!] ERROR: {e}{Colors.RESET}")
-                    failed_exploits.append({
-                        'target': f"{target['host']}:{target['port']}",
-                        'exploit': exploit_name,
-                        'reason': str(e),
-                        'status': 'error'
-                    })
-                    self.record_error('exploit', f"{target['host']}:{target['port']}", e)
-        
-        self._exploit_summary = {
-            'total_exploits': total_exploits,
-            'successful': successful_exploits,
-            'failed': failed_exploits,
-            'results': results
-        }
-        
-        return results
 
     def _display_exploitation_summary(self, results, start_time):
         from datetime import datetime
