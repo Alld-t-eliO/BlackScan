@@ -1,420 +1,323 @@
-```bash
 set -euo pipefail
 
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-PURPLE='\033[0;35m'
-CYAN='\033[0;36m'
-WHITE='\033[1;37m'
-NC='\033[0m'
-
-ROOT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
-VENV_DIR="$ROOT_DIR/venv"
-PYTHON_BIN="${PYTHON:-python3}"
-INSTALL_DEV=false
-INSTALL_ALL=false
-USE_VENV=true
-OS_TYPE="unknown"
-
-print_header() {
-    echo -e "\n${CYAN}╔══════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${CYAN}║${WHITE}                   BLACKSCAN - INSTALLATION                   ${CYAN}║${NC}"
-    echo -e "${CYAN}╚══════════════════════════════════════════════════════════════╝${NC}\n"
-}
-
-print_success() {
-    echo -e "${GREEN}[SUCCESS] $1${NC}"
-}
-
-print_error() {
-    echo -e "${RED}[ERROR] $1${NC}"
-}
-
-print_warning() {
-    echo -e "${YELLOW}[WARNING] $1${NC}"
-}
-
-print_info() {
-    echo -e "${BLUE}[INFO] $1${NC}"
-}
-
-print_step() {
-    echo -e "\n${PURPLE}▶ $1${NC}"
-}
-
-print_separator() {
-    echo -e "${CYAN}────────────────────────────────────────────────────────────────────${NC}"
-}
-
-detect_os() {
-    print_step "Detecting operating system..."
-
-    if [[ "$OSTYPE" == "linux-gnu"* ]]; then
-        OS_TYPE="linux"
-        print_success "OS detected: Linux"
-    elif [[ "$OSTYPE" == "darwin"* ]]; then
-        OS_TYPE="macos"
-        print_success "OS detected: macOS"
-    elif [[ "$OSTYPE" == "cygwin" ]] || [[ "$OSTYPE" == "msys" ]] || [[ "$OSTYPE" == "win32" ]]; then
-        OS_TYPE="windows"
-        print_warning "OS detected: Windows"
-    else
-        OS_TYPE="unknown"
-        print_warning "OS not recognised: $OSTYPE"
-    fi
-}
-
-check_prerequisites() {
-
-    if ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
-        print_error "Python 3.10 or newer is required but is not installed."
-        echo -e "  ${YELLOW}Install Python from: https://www.python.org/downloads/${NC}"
-        exit 1
-    fi
-
-    PYTHON_VERSION=$("$PYTHON_BIN" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
-    PYTHON_MAJOR=$(echo "$PYTHON_VERSION" | cut -d. -f1)
-    PYTHON_MINOR=$(echo "$PYTHON_VERSION" | cut -d. -f2)
-
-    if [[ $PYTHON_MAJOR -lt 3 ]] || [[ $PYTHON_MAJOR -eq 3 && $PYTHON_MINOR -lt 10 ]]; then
-        print_error "Python $PYTHON_VERSION detected. BlackScan requires Python 3.10 or newer."
-        exit 1
-    fi
-
-    print_success "Python $PYTHON_VERSION detected"
-
-    if ! command -v pip3 >/dev/null 2>&1 && ! "$PYTHON_BIN" -m pip --version >/dev/null 2>&1; then
-        print_warning "pip is not available. Attempting to install it..."
-        "$PYTHON_BIN" -m ensurepip --upgrade || {
-            print_error "Unable to install pip automatically."
-            echo -e "  ${YELLOW}Install pip manually and try again.${NC}"
-            exit 1
-        }
-    fi
-
-    print_success "pip is available"
-
-    if command -v git >/dev/null 2>&1; then
-        print_success "git detected"
-    else
-        print_warning "git is not installed (optional, required for development)"
-    fi
-
-    if [[ "$OS_TYPE" == "linux" ]]; then
-        if command -v apt-get >/dev/null 2>&1; then
-            print_info "Debian/Ubuntu distribution detected"
-            print_info "System dependencies will be installed automatically"
-        elif command -v yum >/dev/null 2>&1; then
-            print_info "RHEL/CentOS distribution detected"
-            print_info "System dependencies will be installed automatically"
-        elif command -v dnf >/dev/null 2>&1; then
-            print_info "Fedora distribution detected"
-            print_info "System dependencies will be installed automatically"
-        fi
-    fi
-}
-
-
-install_system_dependencies() {
-    print_step "Installing system dependencies..."
-
-    if [[ "$OS_TYPE" != "linux" ]]; then
-        print_info "Non-Linux system, skipping system dependency installation"
-        return 0
-    fi
-
-    if ! command -v sudo >/dev/null 2>&1; then
-        print_warning "sudo is not available, skipping system dependency installation"
-        return 0
-    fi
-
-    local deps=""
-
-    deps="build-essential libssl-dev libffi-dev"
-
-    if [[ "$INSTALL_ALL" == true ]] || [[ "$INSTALL_DEV" == true ]]; then
-        deps="$deps git curl wget"
-    fi
-
-    if command -v apt-get >/dev/null 2>&1; then
-        print_info "Installing packages: $deps"
-        sudo apt-get update -qq || true
-        sudo apt-get install -y -qq $deps || {
-            print_warning "Failed to install some system dependencies"
-            print_info "Continuing installation; Python dependencies will still be installed"
-        }
-    elif command -v dnf >/dev/null 2>&1; then
-        print_info "Installing packages: $deps"
-        sudo dnf install -y $deps || {
-            print_warning "Failed to install some system dependencies"
-            print_info "Continuing installation; Python dependencies will still be installed"
-        }
-    elif command -v yum >/dev/null 2>&1; then
-        print_info "Installing packages: $deps"
-        sudo yum install -y $deps || {
-            print_warning "Failed to install some system dependencies"
-            print_info "Continuing installation; Python dependencies will still be installed"
-        }
-    else
-        print_warning "No supported package manager detected"
-        print_info "Make sure the following dependencies are installed: $deps"
-    fi
-
-    print_success "System dependencies installed"
-}
-
-
-install_python_dependencies() {
-    print_step "Installing Python dependencies..."
-
-    if [[ "$USE_VENV" == true ]]; then
-        print_info "Creating virtual environment..."
-        "$PYTHON_BIN" -m venv "$VENV_DIR"
-        PIP_CMD="$VENV_DIR/bin/pip"
-        PYTHON_CMD="$VENV_DIR/bin/python"
-    else
-        PIP_CMD="pip3"
-        PYTHON_CMD="$PYTHON_BIN"
-    fi
-
-    print_info "Upgrading pip, setuptools, and wheel..."
-    "$PIP_CMD" install --upgrade pip setuptools wheel -q
-
-    print_info "Installing base dependencies..."
-    "$PIP_CMD" install -e . -q
-
-    if [[ "$INSTALL_ALL" == true ]]; then
-        print_info "Installing all optional dependencies..."
-        "$PIP_CMD" install -e ".[audit,dev,all]" -q
-    elif [[ "$INSTALL_DEV" == true ]]; then
-        print_info "Installing development dependencies..."
-        "$PIP_CMD" install -e ".[dev]" -q
-    fi
-
-    print_success "Python dependencies installed"
-}
-
-install_external_tools() {
-    print_step "Checking recommended external tools..."
-
-    local tools_installed=0
-    local tools_missing=0
-
-    for tool in nmap nuclei httpx subfinder dnsx; do
-        if command -v "$tool" >/dev/null 2>&1; then
-            print_success "$tool is already installed"
-            ((tools_installed++))
-        else
-            print_warning "$tool not found"
-            ((tools_missing++))
-        fi
-    done
-
-    if [[ $tools_missing -gt 0 ]]; then
-        print_info "$tools_missing tools missing out of $((tools_installed + tools_missing))"
-        print_info "You can install them manually:"
-        echo -e "  ${YELLOW}• go install -v github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest${NC}"
-        echo -e "  ${YELLOW}• go install -v github.com/projectdiscovery/httpx/cmd/httpx@latest${NC}"
-        echo -e "  ${YELLOW}• go install -v github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest${NC}"
-        echo -e "  ${YELLOW}• go install -v github.com/projectdiscovery/dnsx/cmd/dnsx@latest${NC}"
-    else
-        print_success "All recommended external tools are installed!"
-    fi
-}
-
-
-test_installation() {
-    print_step "Testing installation..."
-
-    if [[ "$USE_VENV" == true ]]; then
-        PYTHON_CMD="$VENV_DIR/bin/python"
-    else
-        PYTHON_CMD="$PYTHON_BIN"
-    fi
-
-    if "$PYTHON_CMD" -c "import network_scanner" 2>/dev/null; then
-        print_success "Package import successful"
-    else
-        print_error "Package import failed"
-        return 1
-    fi
-
-    if "$PYTHON_CMD" -m network_scanner --help >/dev/null 2>&1; then
-        print_success "--help command works"
-    else
-        print_error "Failed to execute --help"
-        return 1
-    fi
-
-    if "$PYTHON_CMD" -c "from network_scanner.payloads.exploits import list_exploits; print(list_exploits())" >/dev/null 2>&1; then
-        print_success "Exploit import successful"
-    else
-        print_warning "Exploit import failed (optional dependencies may be missing?)"
-    fi
-
-    return 0
-}
-
-create_directories() {
-    print_step "Creating required directories..."
-
-    mkdir -p "$ROOT_DIR/reports"
-    mkdir -p "$ROOT_DIR/logs"
-    mkdir -p "$ROOT_DIR/network_scanner/payloads/wordlists"
-
-    print_success "Directories created"
-}
-
-show_summary() {
-    echo -e "\n${CYAN}╔══════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${CYAN}║${GREEN}                   INSTALLATION SUCCESSFUL!                   ${CYAN}║${NC}"
-    echo -e "${CYAN}╚══════════════════════════════════════════════════════════════╝${NC}"
-
-    echo -e "\n${WHITE}📁 Installation directory:${NC} $ROOT_DIR"
-
-    if [[ "$USE_VENV" == true ]]; then
-        echo -e "${WHITE}🐍 Virtual environment:${NC} $VENV_DIR"
-        echo -e "\n${YELLOW}To activate the virtual environment:${NC}"
-        echo -e "  ${CYAN}source $VENV_DIR/bin/activate${NC}"
-
-        echo -e "\n${YELLOW}To run BlackScan:${NC}"
-        echo -e "  ${CYAN}python scanner.py --help${NC}"
-        echo -e "  ${CYAN}python scanner.py -t 192.168.1.1 --authorized --profile quick${NC}"
-    else
-        echo -e "\n${YELLOW}To run BlackScan:${NC}"
-        echo -e "  ${CYAN}python3 scanner.py --help${NC}"
-        echo -e "  ${CYAN}python3 scanner.py -t 192.168.1.1 --authorized --profile quick${NC}"
-    fi
-
-    echo -e "\n${YELLOW}For the TUI interface:${NC}"
-    echo -e "  ${CYAN}python scanner.py --tui${NC}"
-
-    echo -e "\n${YELLOW}For exploits (lab environments only):${NC}"
-    echo -e "  ${CYAN}python scanner.py -t 192.168.1.1 --authorized --intrusive-checks --exploit${NC}"
-
-    echo -e "\n${WHITE}📚 Documentation:${NC}"
-    echo -e "  • README.md   - User guide"
-    echo -e "  • dev.md      - Development notes"
-
-    echo -e "\n${GREEN}Remember:${NC}"
-    echo -e "  • Use --authorized to confirm that you have permission"
-    echo -e "  • Exploits require --intrusive-checks"
-    echo -e "  • Test ONLY on your own machines in a controlled laboratory environment"
-
-    echo -e "\n${CYAN}────────────────────────────────────────────────────────────────────${NC}\n"
-}
-
-show_help() {
-    cat << EOF
-BlackScan - Installation Script
-
-Usage:
-    ./install.sh [OPTIONS]
-
-Options:
-    --dev           Install development dependencies (ruff, pytest, mypy, etc.)
-    --all           Install all optional dependencies (mysql, ssh, http, etc.)
-    --no-venv       Install directly into the current environment (not recommended)
-    --uninstall     Remove the virtual environment and temporary files
-    --help          Show this help message
-
-Examples:
-    ./install.sh                # Basic installation
-    ./install.sh --dev          # Installation with development tools
-    ./install.sh --all          # Full installation with all dependencies
-    ./install.sh --no-venv      # Install into the current environment
-    ./install.sh --uninstall    # Uninstall BlackScan
-
-Dependencies:
-    Python 3.10+                # Required
-    pip                         # Required
-    git                         # Optional (for development)
-    nmap, nuclei, httpx, etc.   # Optional (for external enrichment)
-
-After installation:
-    source venv/bin/activate    # Activate the virtual environment
-    python scanner.py --help    # View available options
-    python scanner.py --tui     # Launch the TUI
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR"
+
+PROJECT_NAME="Striker"
+VENV_DIR="venv"
+PYTHON_MIN_MAJOR=3
+PYTHON_MIN_MINOR=10
+LAUNCHER_NAME="striker"
+LOG_FILE="install.log"
+
+if [ -t 1 ]; then
+    C_CYAN="\033[36m"
+    C_VIOLET="\033[35m"
+    C_GREEN="\033[32m"
+    C_YELLOW="\033[33m"
+    C_RED="\033[31m"
+    C_RESET="\033[0m"
+    C_BOLD="\033[1m"
+else
+    C_CYAN=""; C_VIOLET=""; C_GREEN=""; C_YELLOW=""; C_RED=""; C_RESET=""; C_BOLD=""
+fi
+
+
+log()    { echo -e "${C_CYAN}[*]${C_RESET} $*" | tee -a "$LOG_FILE"; }
+ok()     { echo -e "${C_GREEN}[✓]${C_RESET} $*" | tee -a "$LOG_FILE"; }
+warn()   { echo -e "${C_YELLOW}[!]${C_RESET} $*" | tee -a "$LOG_FILE"; }
+err()    { echo -e "${C_RED}[✗]${C_RESET} $*" | tee -a "$LOG_FILE" >&2; }
+title()  { echo -e "\n${C_VIOLET}${C_BOLD}══ $* ══${C_RESET}" | tee -a "$LOG_FILE"; }
+
+die() { err "$*"; exit 1; }
+
+banner() {
+    cat <<'EOF'
+
+   ______      _ __
+  / __/ /_____(_) /_____ ____
+ _\ \/ __/ __/ /  '_/ -_) __/
+/___/\__/_/ /_/_/\_\\__/_/
 
 EOF
 }
 
-uninstall() {
-    print_step "Uninstalling BlackScan..."
+MINIMAL=0
+NO_VENV=0
+SKIP_OPTIONAL=0
 
-    if [[ -d "$VENV_DIR" ]]; then
-        print_info "Removing virtual environment..."
-        rm -rf "$VENV_DIR"
-        print_success "Virtual environment removed"
+for arg in "$@"; do
+    case "$arg" in
+        --minimal)      MINIMAL=1 ;;
+        --no-venv)      NO_VENV=1 ;;
+        --skip-optional) SKIP_OPTIONAL=1 ;;
+        -h|--help)
+            cat <<EOF
+${PROJECT_NAME} installer
+
+Usage:
+  ./install.sh [options]
+
+Options:
+  --minimal         Install core dependencies only
+  --no-venv         Install into the current Python environment
+  --skip-optional   Skip optional dependencies (curl_cffi, cloudscraper, etc.)
+  -h, --help        Show this help message
+
+Examples:
+  ./install.sh                    # recommended
+  ./install.sh --minimal          # fastest, no optional modules
+  ./install.sh --no-venv          # for Docker / CI
+EOF
+            exit 0
+            ;;
+        *) die "Unknown option: $arg (use --help)" ;;
+    esac
+done
+
+
+: > "$LOG_FILE"
+banner
+title "$PROJECT_NAME installer"
+log "Log file: $LOG_FILE"
+log "Working directory: $SCRIPT_DIR"
+
+
+title "Step 1/6 — OS detection"
+
+OS="$(uname -s)"
+ARCH="$(uname -m)"
+case "$OS" in
+    Linux*)   PLATFORM="linux" ;;
+    Darwin*)  PLATFORM="macos" ;;
+    *)        PLATFORM="unknown" ;;
+esac
+
+ok "Platform: $PLATFORM ($ARCH)"
+
+if [ "$PLATFORM" = "unknown" ]; then
+    warn "Unsupported OS: $OS — proceeding anyway."
+fi
+
+
+title "Step 2/6 — Python detection"
+
+PYTHON_BIN=""
+for candidate in python3.12 python3.11 python3.10 python3 python; do
+    if command -v "$candidate" >/dev/null 2>&1; then
+        if "$candidate" -c "import sys; sys.exit(0 if sys.version_info >= (3,10) else 1)" 2>/dev/null; then
+            PYTHON_BIN="$candidate"
+            break
+        fi
+    fi
+done
+
+if [ -z "$PYTHON_BIN" ]; then
+    err "No Python >= ${PYTHON_MIN_MAJOR}.${PYTHON_MIN_MINOR} found."
+    case "$PLATFORM" in
+        macos) err "Install with: brew install python@3.12" ;;
+        linux) err "Install with: sudo apt install python3.12 python3.12-venv (or equivalent)" ;;
+    esac
+    exit 1
+fi
+
+PY_VERSION="$("$PYTHON_BIN" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}")')"
+ok "Python: $PYTHON_BIN ($PY_VERSION)"
+
+# ─────────────────────────────────────────────────────────────
+#  3. Virtual environment
+# ─────────────────────────────────────────────────────────────
+title "Step 3/6 — Virtual environment"
+
+if [ "$NO_VENV" -eq 1 ]; then
+    warn "Skipping venv creation (--no-venv)"
+    PIP_CMD="$PYTHON_BIN -m pip"
+    PY_RUN="$PYTHON_BIN"
+else
+    if [ -d "$VENV_DIR" ]; then
+        warn "Existing venv detected at ./$VENV_DIR — reusing"
+    else
+        log "Creating virtual environment in ./$VENV_DIR"
+        "$PYTHON_BIN" -m venv "$VENV_DIR" || die "venv creation failed"
+        ok "Virtual environment created"
     fi
 
-    if [[ -d "$ROOT_DIR/__pycache__" ]]; then
-        print_info "Removing __pycache__ directories..."
-        find "$ROOT_DIR" -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
-        print_success "Temporary files removed"
-    fi
+    # Activate
+    # shellcheck disable=SC1091
+    source "$VENV_DIR/bin/activate"
+    PY_RUN="python"
+    PIP_CMD="pip"
 
-    print_success "Uninstallation completed"
+    # Upgrade pip / setuptools / wheel
+    log "Upgrading pip, setuptools, wheel"
+    "$PIP_CMD" install --quiet --upgrade pip setuptools wheel >>"$LOG_FILE" 2>&1 \
+        || warn "pip upgrade failed (continuing)"
+    ok "Build tools up to date"
+fi
 
-    echo -e "\n${YELLOW}The following directories were not removed (user data):${NC}"
-    echo -e "  • $ROOT_DIR/reports/"
-    echo -e "  • $ROOT_DIR/logs/"
-    echo -e "  • $ROOT_DIR/venv/ (if it still exists)"
-}
+# ─────────────────────────────────────────────────────────────
+#  4. Dependencies
+# ─────────────────────────────────────────────────────────────
+title "Step 4/6 — Dependencies"
 
-main() {
-    while [[ $# -gt 0 ]]; do
-        case $1 in
-            --dev)
-                INSTALL_DEV=true
-                shift
-                ;;
-            --all)
-                INSTALL_ALL=true
-                shift
-                ;;
-            --no-venv)
-                USE_VENV=false
-                shift
-                ;;
-            --uninstall)
-                uninstall
-                exit 0
-                ;;
-            --help)
-                show_help
-                exit 0
-                ;;
-            *)
-                echo -e "${RED}Unknown option: $1${NC}"
-                echo "Use --help to see available options."
-                exit 1
-                ;;
-        esac
+# Core
+CORE_DEPS=(textual requests aiohttp)
+log "Installing core dependencies: ${CORE_DEPS[*]}"
+"$PIP_CMD" install --quiet "${CORE_DEPS[@]}" >>"$LOG_FILE" 2>&1 \
+    || die "Core dependency installation failed"
+ok "Core dependencies installed"
+
+# Optional
+if [ "$MINIMAL" -eq 0 ] && [ "$SKIP_OPTIONAL" -eq 0 ]; then
+    OPTIONAL_DEPS=(curl_cffi cloudscraper redis)
+    for pkg in "${OPTIONAL_DEPS[@]}"; do
+        log "Installing optional: $pkg"
+        if "$PIP_CMD" install --quiet "$pkg" >>"$LOG_FILE" 2>&1; then
+            ok "  $pkg"
+        else
+            warn "  $pkg failed (optional, continuing)"
+        fi
     done
 
-    print_header
-    check_prerequisites
-    detect_os
-
-    if [[ "$OS_TYPE" == "linux" ]]; then
-        install_system_dependencies
+    # Playwright is heavier and needs a browser download
+    read -r -p "$(echo -e "${C_YELLOW}[?]${C_RESET} Install Playwright + Chromium for CAPTCHA fallback? [y/N] ")" PW_ANSWER
+    if [[ "$PW_ANSWER" =~ ^[Yy]$ ]]; then
+        log "Installing Playwright"
+        if "$PIP_CMD" install --quiet playwright >>"$LOG_FILE" 2>&1; then
+            ok "  playwright package"
+            log "Downloading Chromium (~150 MB)"
+            if "$PY_RUN" -m playwright install chromium >>"$LOG_FILE" 2>&1; then
+                ok "  chromium browser"
+            else
+                warn "  chromium download failed — CAPTCHA fallback unavailable"
+            fi
+        else
+            warn "  playwright install failed"
+        fi
     else
-        print_info "Non-Linux system, skipping system dependency installation"
+        warn "Skipping Playwright (CAPTCHA fallback disabled)"
     fi
+else
+    warn "Skipping optional dependencies"
+fi
 
-    create_directories
-    install_python_dependencies
-    install_external_tools
-    if test_installation; then
-        print_success "Installation validated"
+# ─────────────────────────────────────────────────────────────
+#  5. Project sanity check
+# ─────────────────────────────────────────────────────────────
+title "Step 5/6 — Project sanity check"
+
+REQUIRED_FILES=(
+    "main.py"
+    "core/__init__.py"
+    "core/ddos.py"
+    "core/proxy_rotator.py"
+    "core/user_agent_rotator.py"
+    "core/delay_jitter.py"
+    "core/adaptive_backoff.py"
+    "core/request_fragmenter.py"
+    "core/distributed_bots.py"
+    "core/captcha_waf_bypass.py"
+    "ui/ui.py"
+)
+
+MISSING=0
+for f in "${REQUIRED_FILES[@]}"; do
+    if [ -f "$f" ]; then
+        ok "  $f"
     else
-        print_warning "Some tests failed, but the installation is probably functional"
+        warn "  MISSING: $f"
+        MISSING=$((MISSING + 1))
     fi
-    show_summary
-}
+done
 
-main "$@"
-```
+if [ "$MISSING" -gt 0 ]; then
+    warn "$MISSING file(s) missing — the project may not run correctly"
+else
+    ok "All required files present"
+fi
+
+# Ensure core/__init__.py exists
+if [ ! -f "core/__init__.py" ]; then
+    log "Creating empty core/__init__.py"
+    touch "core/__init__.py"
+    ok "core/__init__.py created"
+fi
+
+# ─────────────────────────────────────────────────────────────
+#  6. Launcher + self-test
+# ─────────────────────────────────────────────────────────────
+title "Step 6/6 — Launcher and self-test"
+
+# Self-test: import core modules
+log "Running import self-test"
+SELFTEST_FAILED=0
+for mod in proxy_rotator user_agent_rotator delay_jitter adaptive_backoff \
+           request_fragmenter distributed_bots captcha_waf_bypass ddos; do
+    if "$PY_RUN" -c "import sys; sys.path.insert(0, '.'); from core.${mod} import *" >>"$LOG_FILE" 2>&1; then
+        ok "  core.${mod}"
+    else
+        warn "  core.${mod} — import failed (see $LOG_FILE)"
+        SELFTEST_FAILED=$((SELFTEST_FAILED + 1))
+    fi
+done
+
+if [ "$SELFTEST_FAILED" -eq 0 ]; then
+    ok "All core modules import cleanly"
+else
+    warn "$SELFTEST_FAILED module(s) failed to import"
+fi
+
+# Generate launcher
+LAUNCHER_PATH="$SCRIPT_DIR/$LAUNCHER_NAME"
+log "Generating launcher: $LAUNCHER_PATH"
+
+cat > "$LAUNCHER_PATH" <<EOF
+#!/usr/bin/env bash
+# Auto-generated by install.sh
+cd "$SCRIPT_DIR"
+if [ -d "$VENV_DIR" ]; then
+    source "$VENV_DIR/bin/activate"
+fi
+python ui/ui.py "\$@"
+EOF
+
+chmod +x "$LAUNCHER_PATH"
+ok "Launcher created: $LAUNCHER_PATH"
+
+# Optionally symlink to /usr/local/bin
+if [ -w "/usr/local/bin" ]; then
+    ln -sf "$LAUNCHER_PATH" "/usr/local/bin/$LAUNCHER_NAME"
+    ok "Symlink installed: /usr/local/bin/$LAUNCHER_NAME"
+    log "You can now run '$LAUNCHER_NAME' from anywhere"
+else
+    warn "Cannot write to /usr/local/bin — run manually:"
+    echo "    sudo ln -sf \"$LAUNCHER_PATH\" /usr/local/bin/$LAUNCHER_NAME"
+fi
+
+# ─────────────────────────────────────────────────────────────
+#  Done
+# ─────────────────────────────────────────────────────────────
+title "Installation complete"
+
+cat <<EOF
+
+${C_GREEN}${C_BOLD}✓ $PROJECT_NAME is ready.${C_RESET}
+
+${C_CYAN}Launch the TUI:${C_RESET}
+    ./$LAUNCHER_NAME
+    # or
+    $( [ "$NO_VENV" -eq 0 ] && echo "source $VENV_DIR/bin/activate && python ui/ui.py" || echo "python ui/ui.py" )
+
+${C_CYAN}CLI — resilience test:${C_RESET}
+    python main.py dos 192.168.56.20 -p 80 -t 10 -s 50 -i 15 -d 60
+
+${C_CYAN}CLI — stealth HTTP:${C_RESET}
+    python main.py scrape https://target.local/ --verbose
+
+${C_YELLOW}Reminder:${C_RESET}
+    The offensive module refuses non-private IPs.
+    Use it only on isolated lab networks.
+
+${C_CYAN}Logs:${C_RESET} $LOG_FILE
+
+EOF
