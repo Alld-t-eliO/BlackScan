@@ -1,9 +1,0 @@
-VPS_ENABLED = False
-VPS_HOST = ""
-VPS_PORT = 22
-VPS_USERNAME = ""
-VPS_IDENTITY_FILE = ""
-VPS_REMOTE_PATH = "/opt/blackscan"
-VPS_TIMEOUT = 15
-VPS_COMMAND = "python3 -m network_scanner"
-VPS_REPORTS_PATH = "/opt/blackscan/reports"
