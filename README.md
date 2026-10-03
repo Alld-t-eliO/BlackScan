@@ -1,192 +1,296 @@
-# Striker
+# BlackScan
 
-État documenté le 3 octobre 2026, à partir d'une revue statique de la copie du projet fournie. Cette documentation décrit le code présent ; elle ne constitue pas une validation de fonctionnement.
+BlackScan is an authorized network scanner written in Python for infrastructure where you have explicit permission to scan. All scan results come from real network responses; there is no simulation mode.
 
-Striker est un prototype Python regroupant une API HTTP, une CLI, des utilitaires de temporisation et de traitement de tâches, ainsi qu'une interface terminal Textual orientée vers un module DoS actuellement absent. Plusieurs intégrations sont incomplètes et les différents points d'entrée n'utilisent pas tous le même chemin de traitement.
+It performs host discovery, TCP port scanning, lightweight service fingerprinting, basic HTTP/TLS checks, risk scoring, and report generation. It is not a replacement for mature tools such as Nmap or commercial vulnerability scanners.
 
-Le rapport [AUDIT.md](AUDIT.md) présente les anomalies, leurs conséquences et les corrections proposées. Aucun correctif de code n'a été appliqué dans le cadre de cette revue.
+## Screenshots
 
-## État actuel
+### Main Menu
 
-| Composant | Ce que contient cette copie | Limite principale |
-| --- | --- | --- |
-| CLI HTTP | Sous-commande `scrape` de `main.py`, avec pool de threads | Utilise `requests` et le backoff, pas le chemin CAPTCHA/navigateur/TLS de `get()` |
-| API Python | Classe `ScrapingStack` dans `main.py` | Chemins HTTP distincts, garanties de temporisation et erreurs non uniformes |
-| Interface terminal | `StrikerTUI` et `MainScreen` dans `ui/ui.py` | Le bouton de démarrage tente d'importer un module absent |
-| Sous-commande `dos` | Déclaration du parseur et adaptateur dans `main.py` | `application.dos` n'existe pas dans cette arborescence |
-| Ancien fichier DoS | `test/core/ddos.py` | Fichier syntaxiquement invalide, non assimilable à une implémentation utilisable |
-| File de tâches | File en mémoire et adaptateur Redis | Redis n'est pas exposé par la CLI principale ; pas d'acquittement durable des tâches |
-| Tests | Script de démonstration `test/test.py` | Simulation par défaut, sans assertions de non-régression |
-| Installation | Script Bash `install.sh` et liste de dépendances | Installateur désynchronisé de l'arborescence et défectueux en mode `--no-venv` |
+![BlackScan TUI main menu](docs/images/blackscan-home.png)
 
-La restriction globale aux IP privées annoncée par l'ancien README n'est pas établie par ce code. `test/test.py` comporte des contrôles locaux dans son point d'entrée, mais ils ne constituent pas une politique de sécurité commune au projet. L'ancien fichier `test/core/ddos.py` contient une cible publique et des instructions réseau au niveau global ; il ne doit pas être traité comme un test automatisé.
+### Scan Example
 
-## Arborescence
+![BlackScan scan progress and results](docs/images/blackscan-scan-example.png)
 
-```text
-Striker/
-├── main.py
-├── install.sh
-├── config/
-│   ├── __init__.py
-│   └── settings.py               # vide
-├── docs/
-│   ├── README.md
-│   ├── AUDIT.md
-│   ├── requirements.txt
-│   └── struct.txt
-├── identity/
-│   ├── __init__.py
-│   └── user_agent_rotator.py
-├── network/
-│   ├── __init__.py
-│   └── stealth_browser.py
-├── policies/
-│   ├── __init__.py
-│   ├── adaptive_backoff.py
-│   └── delay_jitter.py
-├── protection_bypass/
-│   ├── __init__.py
-│   ├── captcha_solvers.py
-│   ├── captcha_waf_bypass.py
-│   └── protection_detector.py
-├── proxy/
-│   ├── __init__.py
-│   └── proxy_rotator.py
-├── scraping/
-│   ├── __init__.py
-│   └── request_fragmenter.py
-├── test/
-│   ├── test.py
-│   └── core/
-│       ├── __init__.py
-│       └── ddos.py
-├── ui/
-│   ├── __init__.py
-│   ├── cli.py
-│   ├── config.py
-│   ├── tui.tcss
-│   └── ui.py
-└── workers/
-    ├── __init__.py
-    └── distributed_bots.py
-```
+## Scope and Safety
 
-L'environnement local `venv/`, les caches Python et les métadonnées macOS sont omis de cet inventaire. Il n'y a pas de dossier `application/` ni de dossier `core/` à la racine dans la copie examinée.
+- Use BlackScan only on systems you own or are explicitly authorized to assess.
+- `--authorized` remains a compatibility flag in the CLI; the TUI requires explicit scope confirmation before starting a scan.
+- Intrusive checks are disabled by default and require `--intrusive-checks`.
+- Experimental exploitation is unavailable in the supported scanner. `--exploit` produces an explicit error; the legacy `auto_exploit` runner raises a safety error.
+- Credential-audit compatibility helpers are guarded, capped, and not exposed by the main CLI. Experimental source files are separate from the scanner.
 
-## Dépendances et installation
+## Features
 
-L'installateur demande Python 3.10 ou supérieur. La compatibilité des versions des bibliothèques n'a pas été testée pendant cette revue.
+- Host discovery by ICMP ping with TCP fallback probes.
+- Concurrent TCP port scanning.
+- Scan profiles: `quick`, `web`, `internal`, `full`, and `stealth`.
+- HTTP fingerprinting: status, title, redirects, selected headers, cookies, favicon hash, common paths, and sensitive path probes.
+- TLS metadata and certificate verification summary.
+- HTTP/HTTPS fingerprinting through an HTTP proxy; SOCKS4a/SOCKS5 transport for TCP discovery and service collection.
+- Remote execution on an existing SSH VPS, with known-host verification and report retrieval over SFTP.
+- Lightweight vulnerability checks for common exposure patterns.
+- Risk scoring per service.
+- Reports in JSON, HTML, CSV, and Markdown.
+- Interactive TUI for configuring scans, saving reusable target profiles, managing payload wordlists, enabling external enrichment, and reviewing generated JSON reports.
+- Optional comparison against a previous JSON report.
+- Vulnerability trend analysis across multiple JSON reports.
+- Detection of external tools such as `nmap`, `nuclei`, `httpx`, `subfinder`, `dnsx`, `whois`, `dig`, `ffuf`, `feroxbuster`, `naabu`, `katana`, `sherlock`, and `recon-ng`.
+- Optional external enrichment during scans with structured output in JSON, HTML, CSV, and Markdown reports.
 
-La liste fournie se trouve dans **`docs/requirements.txt`** :
+## Installation
 
-```text
-textual>=0.60
-requests>=2.31
-aiohttp>=3.9
-```
+Python 3.10 or newer is required.
 
-Ces bornes minimales ne constituent pas un verrouillage des versions. `requests` sert aux chemins HTTP classiques ; Textual sert à la TUI ; `aiohttp` est importé dans la méthode d'envoi asynchrone du fragmenter.
-
-Pour préparer un environnement neuf, depuis la racine du projet :
+Recommended setup after cloning:
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install -r docs/requirements.txt
+git clone <repository-url>
+cd BlackScan
+chmod +x install.sh
+./install.sh
+source venv/bin/activate
+blackscan --help
 ```
 
-Ces commandes sont fournies comme instructions de préparation et n'ont pas été exécutées lors de l'audit. Elles n'activent aucun test réseau.
+The installer creates a local `venv`, upgrades the build tools, installs BlackScan in editable mode, creates `reports/` and `network_scanner/payloads/payloads/`, and verifies that the CLI can start.
 
-Des imports optionnels existent pour `curl_cffi`, `cloudscraper`, `playwright`, `nodriver` et `redis`. Ils ne figurent pas dans `docs/requirements.txt`. L'installateur propose les trois premiers composants `curl_cffi`, `cloudscraper`, `redis`, puis demande séparément s'il faut installer Playwright et Chromium ; il ne propose pas `nodriver`. La présence du paquet Playwright ne garantit pas celle du navigateur.
-
-**`install.sh` n'est pas une procédure fiable dans cette copie.** Il contient des constructions Bash sans shebang, vise l'ancien dossier `core/`, puis tente de créer `core/__init__.py` sans créer son parent. Son mode `--no-venv` traite une commande avec arguments comme un seul nom d'exécutable. Consulter A02 dans l'audit avant de s'y fier.
-
-## Points d'entrée
-
-Les commandes d'aide et d'ouverture ci-dessous décrivent les entrées présentes ; elles n'ont pas été lancées pendant l'audit :
+For VPS and SOCKS support:
 
 ```bash
-python main.py --help
-python main.py scrape --help
-python -m ui.ui
+./install.sh --network
 ```
 
-La TUI est un écran dédié au module offensif, pas une interface générale pour les fonctions HTTP. Elle affiche une cible, un port, des paramètres de travail et un panneau d'état rafraîchi toutes les 0,5 seconde. Le démarrage échoue dans cette copie à cause de l'import de `application.dos`. La documentation ne fournit pas de procédure pour remettre cet ancien module en service.
+See [VPS and proxy setup](VPS_PROXY.md) for configuration, examples and transport limits.
 
-`ui/cli.py` contient un second constructeur de parseur, non utilisé par `main.py`. Ses choix `process` et `async` ne correspondent pas à des modes pris en charge par `WorkerPool`, qui accepte uniquement `thread`.
+For optional credential-audit dependencies:
 
-### Options de la CLI HTTP
+```bash
+./install.sh --audit
+```
 
-| Argument | Défaut | Rôle dans le code |
-| --- | --- | --- |
-| `urls` | liste vide | URLs positionnelles |
-| `--urls-file` | aucun | Ajout d'URLs depuis un fichier texte |
-| `--proxies-file` | aucun | Liste de proxies |
-| `--ua-file` | aucun | Liste de User-Agent |
-| `--workers` | 4 | Nombre de threads ; la CLI impose au moins 1 |
-| `--min-delay` | 0.4 | Borne basse du jitter |
-| `--max-delay` | 2.5 | Borne haute du jitter |
-| `--verbose` | désactivé | Diagnostic et affichage complémentaire |
-| `--captcha-key` | aucune | Transmis au constructeur de la pile, pas au handler HTTP par défaut |
-| `--captcha-service` | `capsolver` | Le parseur accepte aussi `2captcha` et `anticaptcha` ; ce dernier n'a pas d'implémentation dédiée |
-| `--no-browser` | désactivé | Configure l'objet de gestion des protections, non utilisé par le handler de `fetch_many()` |
-| `--no-tls` | désactivé | Même limite de câblage pour le chemin CLI HTTP |
+For development and tests:
 
-Le handler par défaut effectue des GET avec `requests.Session` et un timeout de 20 secondes par appel. Il renvoie l'URL, le statut, une taille calculée avec `len(resp.text)` et l'identifiant du worker. Cette taille représente des caractères, pas des octets. La CLI affiche principalement une durée et des compteurs ; elle n'enregistre pas le contenu des pages.
+```bash
+./install.sh --dev
+```
 
-Les compteurs `total_done` et `total_failed` décrivent actuellement l'issue du handler Python. Ils ne garantissent pas un succès HTTP : une réponse 404 ou une dernière réponse 503 peut être comptée comme une tâche terminée.
+If `python3` is not the Python executable you want to use:
 
-## API et chemins de traitement
+```bash
+PYTHON=/path/to/python3 ./install.sh
+```
 
-`ScrapingStack` assemble les objets suivants : rotation des User-Agent, proxy optionnel, jitter, limiteur, backoff, fragmenter et gestionnaire de protections.
+## Update
 
-| Méthode | Chemin réel | Résultat |
-| --- | --- | --- |
-| `fetch`, `get`, `post` | `CaptchaWafBypass.request` | Réponse du transport, réponse synthétique navigateur, exception ou `None` selon le chemin |
-| `fetch_many` | `WorkerPool` → handler → `BotContext.request` → `AdaptiveBackoff.request` | Dictionnaire de statistiques, listes de `Task` en succès/échec |
-| `upload_chunked` | `RequestFragmenter.upload_in_chunks` | Liste de réponses |
-| `paginate` | `RequestFragmenter.paginate` | Liste de réponses ; détection de fin actuellement défectueuse |
-| `split_params` | `RequestFragmenter.split_params` | Réponses à des sous-ensembles des paramètres |
-| `stats` | États de backoff et de rotation | Dictionnaire ; ce n'est pas une mesure exhaustive des requêtes |
-| `close` | Fermeture du gestionnaire de protections | La session du fragmenter n'est pas fermée ici |
+To get the latest version after cloning:
 
-`fetch_many()` matérialise les URLs en liste et installe des gestionnaires de signaux. Son emploi dans un thread secondaire pose donc problème. Les résultats contiennent des objets `Task`, pas directement des objets JSON sérialisables.
+```bash
+cd BlackScan
+git pull
+./install.sh
+source venv/bin/activate
+blackscan --help
+```
 
-### Temporisation et backoff
+If the virtual environment is already active, you can also refresh the editable install:
 
-`DelayJitter` propose `uniform`, `gaussian`, `exponential`, `lognormal` et `human`, ainsi qu'une attente asynchrone. `RateLimiter` conserve des horodatages sous verrou, mais sa réservation des appels différés ne garantit pas la limite sous concurrence.
+```bash
+pip install -e .
+```
 
-`AdaptiveBackoff` conserve un état par `netloc`, propose `aimd`, `simple`, `pid` et `adaptive`, et comporte un circuit breaker. Il sait lire un `Retry-After` numérique ou une date HTTP, mais le délai résultant est plafonné et soumis au jitter : le minimum demandé par le serveur n'est donc pas garanti. Les attentes ne prennent pas de signal d'annulation.
+## Usage
 
-### Tâches et Redis
+Show the CLI help:
 
-`WorkerPool` gère des threads, des nouvelles tentatives, des callbacks et des résultats en mémoire. `shard_by` calcule une clé dans chaque tâche ; aucun ordonnancement séparé par domaine n'utilise cette clé.
+```bash
+blackscan --help
+```
 
-`RedisTaskQueue` est utilisable par injection dans `WorkerPool`. Il utilise des listes Redis avec retrait destructif : il n'existe ni acquittement, ni réservation temporaire, ni récupération automatique d'une tâche abandonnée après retrait. Les états et résultats du pool restent locaux au processus. Ce n'est pas un service distribué durable complet.
+Run a small authorized scan:
 
-### Fragmentation et pagination
+```bash
+blackscan -t 192.168.56.0/24 --authorized --profile quick
+```
 
-`upload_in_chunks()` sérialise le contenu puis envoie plusieurs requêtes portant `X-Chunk-Index` et `X-Chunk-Total`. Cela nécessite un serveur sachant interpréter ce protocole applicatif. Il n'y a pas d'identifiant de transfert ni de validation globale de réassemblage.
+Scan selected ports:
 
-`stream_in_chunks()` utilise un générateur pour un seul envoi ; ce générateur n'est pas recréé lors des reprises. `split_params()` produit plusieurs requêtes indépendantes et ne préserve pas nécessairement le sens d'une requête comportant tous les filtres ensemble.
+```bash
+blackscan -t 192.168.56.10 --authorized --ports 22,80,443,8000-8010
+```
 
-L'envoi asynchrone est séquentiel et renvoie des dictionnaires contenant statut et corps. Il n'applique pas les mêmes politiques que l'envoi synchrone. Avec un backoff injecté, le chemin synchrone court-circuite notamment le timeout du fragmenter et son limiteur.
+Run web-focused checks:
 
-### Intégrations de protections
+```bash
+blackscan -t 192.168.56.10 --authorized --profile web
+```
 
-Les modules contiennent des heuristiques de détection, des adaptateurs de services et des chemins navigateur/TLS. Leur présence ne prouve ni leur efficacité ni leur compatibilité avec des protections ou services actuels. Aucun appel à ces services n'a été effectué ou validé.
+Route HTTP/HTTPS fingerprinting through a proxy:
 
-Le chemin navigateur produit une réponse synthétique dont le statut peut être déclaré 200 sans reprendre le véritable statut HTTP. Le chemin `post()` peut aussi répéter une opération après une réponse 201 ou 204. Ces comportements interdisent de considérer cette API comme un client HTTP transparent et fiable.
+```bash
+blackscan -t 192.168.56.10 --authorized --profile web --proxy http://127.0.0.1:8080
+```
 
-## Configuration
+Enable application-level checks on authorized targets:
 
-`config/settings.py` est vide. `ui/config.py` définit des constantes, mais `ui/ui.py` ne les importe pas. La TUI utilise les variables d'environnement `APP_NAME`, `VERSION` et `GITHUB_NAME` avec ses propres valeurs par défaut ; certains affichages restent codés en dur. La version `1.0.0` du fichier de configuration et la valeur `0.0.1` de la TUI ne sont pas une source de version unifiée.
+```bash
+blackscan -t 192.168.56.10 --authorized --profile internal --intrusive-checks
+```
 
-## Tests et garanties
+Run available external enrichment tools and include their output in the final reports:
 
-`test/test.py` est une démonstration à sockets simulés par défaut. Elle contient des impressions et des échecs aléatoires, sans assertions ni validation des modules applicatifs. Son mode réel comporte des contrôles de boucle locale dans le bloc principal seulement.
+```bash
+blackscan -t example.com --authorized --profile web --external-enrichment
+```
 
-La revue a couvert les 27 fichiers Python hors environnement virtuel, le thème, l'installateur et les fichiers de documentation. Une lecture syntaxique par `ast.parse` a signalé une erreur dans `test/core/ddos.py`. Elle ne valide ni les imports, ni les bibliothèques, ni les interactions réseau. Aucun module du projet n'a été importé ou exécuté ; aucun test réseau, installation ou lancement de navigateur n'a été effectué.
+External enrichment is automatic for `--profile full` and `-a` scans. For other profiles, enable it with `--external-enrichment` or the TUI `External Enrichment` field. It uses only tools already installed on the machine.
 
-La priorité de remise en qualité est détaillée dans [AUDIT.md](AUDIT.md) : retrait des garanties non établies, isolation des anciens scripts, respect des limites et erreurs HTTP, puis tests déterministes sans réseau. Aucun fichier de licence n'a été trouvé dans le périmètre examiné ; aucune licence n'est présumée.
+The enrichment pipeline runs tools sequentially and lets each step feed the next one:
+
+```text
+whois -> dig -> subfinder -> dnsx -> naabu -> nmap -> httpx -> katana -> ffuf -> feroxbuster -> nuclei -> sherlock (inventory only)
+```
+
+`recon-ng` and `sherlock` are detected and reported but not auto-executed: the former is interactive and the latter searches usernames, not network services. Discovered subdomains are inventory only; they require a separate explicit scan target. Final reports keep raw tool output and also include a normalized summary of domains, subdomains, DNS records, hosts, ports, URLs, endpoints, paths, technologies, and findings.
+
+Compare with an older JSON report:
+
+```bash
+blackscan -t 192.168.56.0/24 --authorized --compare reports/scan_report_previous.json
+```
+
+Analyze vulnerability evolution across existing reports:
+
+```bash
+blackscan --trend reports/scan_report_old.json reports/scan_report_new.json
+```
+
+List optional external tools detected on the machine:
+
+```bash
+blackscan --list-external-tools
+```
+
+Open the interactive terminal UI:
+
+```bash
+blackscan --tui
+```
+
+From the TUI you can start a new scan, create, edit, delete, or load saved target profiles, view/add/delete payload wordlists, confirm authorized scope, set target/profile/ports/proxy/options, enable external enrichment, list external tools, or open reports. Saved target profiles can be loaded from the `Profiles` page or directly from the `New Scan` settings with `[97] Load saved profile`. Use `[95] Connection settings` in `New Scan` to select local/proxy/VPS execution and enter connection settings. The TUI uses numbered choices: type the number shown on screen and press Enter.
+
+You can drop payload wordlists directly into the repository `network_scanner/payloads/payloads/` folder. Text payload files appear in the TUI `Payloads` page using their filename without the extension as the payload name. Python files and hidden files are ignored.
+
+Open a specific JSON report directly in the report viewer:
+
+```bash
+blackscan --tui reports/scan_report_20260902_173005.json
+```
+
+You can also run the module directly without activating the environment:
+
+```bash
+venv/bin/python -m network_scanner --help
+```
+
+## Reports
+
+By default reports are written to `reports/`:
+
+- `scan_report_<timestamp>.json`
+- `scan_report_<timestamp>.html`
+- `scan_report_<timestamp>.csv`
+- `scan_report_<timestamp>.md`
+
+Use `-o` or `--output-dir` to choose another output directory.
+
+Trend analysis writes:
+
+- `vulnerability_trend_<timestamp>.json`
+- `vulnerability_trend_<timestamp>.md`
+
+## Project Layout
+
+- `network_scanner/scanner/main.py`: CLI entry point.
+- `network_scanner/scanner/scan.py`: scan orchestration and `NetworkScanner`.
+- `network_scanner/scanner/report.py`: JSON, HTML, CSV, and Markdown report generation.
+- `network_scanner/scanner/comparaison.py`: vulnerability trend report generation.
+- `network_scanner/scanner/parser.py`: CLI parser, port parsing, and proxy validation.
+- `network_scanner/core/ui.py`: interactive TUI for scan setup, target profiles, payload wordlists, and JSON report review.
+- `network_scanner/settings.py`: scan profile and port defaults.
+- `network_scanner/modules/ping_sweep.py`: host discovery.
+- `network_scanner/modules/port_scanner.py`: TCP port scanner.
+- `network_scanner/modules/service_scan.py`: service, HTTP, and TLS fingerprinting.
+- `network_scanner/checks/`: vulnerability check framework and built-in checks.
+- `network_scanner/modules/risk.py`: service risk scoring.
+- `network_scanner/modules/report_diff.py`: report comparison and vulnerability trend analysis.
+- `network_scanner/modules/brute_force/`: guarded credential-audit compatibility helpers.
+- `network_scanner/payloads/base.py`: payload wordlist loading, user payload storage, and generated payload helpers.
+- `network_scanner/payloads/payloads/`: brute-force compatibility modules and drop-in folder for user-provided `.txt` payload wordlists.
+- `config/exploit_config.yaml`: compatibility config documenting disabled offensive workflows.
+- `tests/`: unit tests.
+
+## Development
+
+Run tests:
+
+```bash
+source venv/bin/activate
+python -m unittest discover -s tests -v
+```
+
+Run lint:
+
+```bash
+ruff check .
+```
+
+The repository CI runs both commands across Python 3.10, 3.11, and 3.12. Tests use mocked network responses plus a real HTTP fixture bound exclusively to `127.0.0.1`; no external scan target is contacted. The local integration test requires permission to bind a loopback socket.
+
+Ruff uses the standard `E4`, `E7`, `E9`, and `F` correctness rules for the supported code. Experimental sources in `payloads/exploits` are excluded from this lint scope. VPS and proxy modules are included. See [stabilization notes](STABILIZATION.md) for the verified scope and remaining limitations.
+
+## Troubleshooting
+
+If `blackscan` is not found, activate the virtual environment:
+
+```bash
+source venv/bin/activate
+```
+
+If installation fails while downloading packages, check internet access and rerun:
+
+```bash
+./install.sh
+```
+
+If macOS blocks execution of the installer, restore the executable bit:
+
+```bash
+chmod +x install.sh
+```
+
+## Execution and result integrity
+
+- `--skip-discovery` scans the supplied IP/name/range even when ICMP and discovery probes fail. The maximum host limit still applies.
+- `--no-external-enrichment` disables external commands even for the `full` profile.
+- `--external-timeout 120` sets the time budget for each external command independently of socket timeouts.
+- HTTPS verification stays enabled. Configure the appropriate CA trust and target hostname for your infrastructure; verification failures remain visible.
+- Host discovery also probes selected ports, up to 32 discovery ports. For exhaustive coverage of filtered hosts, use `--skip-discovery`.
+- The `full` profile is an extended TCP selection, not all 65535 ports. Use `--ports 1-65535` for all TCP ports. UDP scanning is not implemented.
+- HTTP on an unknown port is probed when no passive banner is received; protocol detection remains heuristic.
+- Sensitive-path findings require content evidence, not only an HTTP 200 response.
+- External findings from Nuclei are included in vulnerability totals and risk scoring, including `critical` severity.
+- Nmap covers at most 20 targets and the web mapping tools at most 10 URLs per scan; report notes identify these limits.
+- External binaries and their data/templates must be installed separately. `httpx` must be the ProjectDiscovery tool, not the Python HTTP client executable.
+- `ffuf` output is consumed as JSON lines. Missing tools, errors, and timeouts are listed per step.
+- Adding payload wordlists does not register them as automatic actions or change external tool wordlists.
+
+Each run writes a uniquely named JSON, HTML, CSV, and Markdown report, including when no hosts are discovered. JSON is written atomically. Scan status distinguishes `complete`, `partial`, `no_hosts`, and `interrupted`; errors are retained with their target and stage. A completed run does not establish that a target has no vulnerabilities.
+
+CLI exit codes: `0` completed, `1` execution error, `2` invalid arguments/incomplete scan/no hosts, `130` interrupted. No synthetic findings are added. Unit-test fixtures live under `tests/` and are never loaded into scans.
+
+Comparisons require matching target, ports, profile, and check settings. Partial scans cannot mark findings resolved. Trend analysis rejects incomplete scans. Proxy credentials and authentication headers are redacted from structured reports.
+
+Experimental exploitation sources remain in `network_scanner/payloads/exploits/`. They are not imported by the supported scanner and are not validated production integrations. The previous scanner implementation is preserved as text at `docs/learning/scanner_before_stabilization.py.txt`. The YAML file documents legacy settings and is not a runtime execution policy.
