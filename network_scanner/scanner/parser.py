@@ -1,4 +1,5 @@
 import argparse
+import os
 import ipaddress
 import re
 from urllib.parse import urlsplit, urlunsplit
@@ -100,15 +101,33 @@ def build_parser():
         action='store_true',
         help='(optional, deprecated) Mark scan as authorized',
     )
-    exploit_group = parser.add_argument_group('Exploitation Phase')
-    exploit_group.add_argument('--exploit', action='store_true')
-    exploit_group.add_argument('--exploit-timeout', type=positive_int, default=60)
-    exploit_group.add_argument('--exploit-targets')
-    exploit_group.add_argument('--exploit-auto-confirm', action='store_true', default=True)  # ← défaut à True
+    exploit_group = parser.add_argument_group('Unavailable legacy options')
+    exploit_group.add_argument('--exploit', action='store_true', help='Unavailable: retained only to explain legacy invocations')
+    exploit_group.add_argument('--exploit-timeout', type=positive_int, default=60, help=argparse.SUPPRESS)
+    exploit_group.add_argument('--exploit-targets', help=argparse.SUPPRESS)
+    exploit_group.add_argument('--exploit-auto-confirm', action='store_true', default=False, help=argparse.SUPPRESS)
     exploit_group.add_argument(
         '--exploit-module',
         choices=['ssh', 'web', 'database', 'all'],
-        default='all',
+        default='all', help=argparse.SUPPRESS,
     )
+
+    execution = parser.add_argument_group('Execution and transport')
+    execution.add_argument('--execution-mode', '--mode', choices=['local', 'proxy', 'vps'],
+                           default=os.environ.get('BLACKSCAN_EXECUTION_MODE', 'local'))
+    execution.add_argument('--socks-proxy', default=os.environ.get('BLACKSCAN_SOCKS_PROXY'),
+                           help='SOCKS4/5 URL for TCP discovery and service collection')
+    for name, description in {
+        'vps-host': 'SSH hostname', 'vps-user': 'SSH username',
+        'vps-key': 'SSH private key path (or use the SSH agent)',
+        'vps-known-hosts': 'Additional trusted known_hosts file',
+        'vps-directory': 'Absolute remote BlackScan project directory',
+        'vps-python': 'Remote Python executable, preferably the venv Python',
+        'vps-reports': 'Absolute remote directory for scan reports',
+    }.items():
+        execution.add_argument('--' + name, default=os.environ.get('BLACKSCAN_' + name.upper().replace('-', '_')), help=description)
+    for name in ('vps-port', 'vps-timeout', 'vps-scan-timeout'):
+        execution.add_argument('--' + name, type=positive_int,
+                               default=os.environ.get('BLACKSCAN_' + name.upper().replace('-', '_')))
 
     return parser

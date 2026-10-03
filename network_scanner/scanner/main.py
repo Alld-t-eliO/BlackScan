@@ -3,9 +3,10 @@ import sys
 from network_scanner.core import ui
 from network_scanner.modules import external_tools
 from network_scanner.scanner.comparaison import generate_trend_reports
-from network_scanner.scanner.parser import build_parser, parse_ports, validate_proxy_url
+from network_scanner.scanner.parser import build_parser
 from network_scanner.scanner.report import Colors
 from network_scanner.scanner.scan import NetworkScanner
+from network_scanner.vps_proxy.main import Orchestrator
 
 
 def main():
@@ -22,13 +23,15 @@ def main():
     if args.tui is not None:
         try:
             if args.tui == 'latest':
-                tui_action = ui.run_app(args.output_dir)
+                tui_action = ui.run_app(args.output_dir, {**vars(args), 'compare_report': args.compare})
             else:
                 ui.run_report_viewer(args.tui)
                 return
+        except KeyboardInterrupt:
+            sys.exit(130)
         except (OSError, RuntimeError, json.JSONDecodeError, ValueError) as exc:
             parser.error(str(exc))
-        if tui_action.get('action') == 'quit':
+        if not tui_action or tui_action.get('action') == 'quit':
             return
         if tui_action.get('action') == 'list_external_tools':
             for name, info in external_tools.detect_external_tools().items():
@@ -76,51 +79,27 @@ def main():
         )
         return
 
+    if args.exploit or args.exploit_targets or args.exploit_auto_confirm or args.exploit_timeout != 60 or args.exploit_module != 'all':
+        parser.error('Experimental exploitation is unavailable in the supported scanner')
+
     if not args.target:
         parser.error("required argument: -t/--target")
 
+    options = vars(args).copy()
+    options['compare_report'] = args.compare
     try:
-        ports = parse_ports(args.ports) if args.ports else None
-        proxy_url = validate_proxy_url(args.proxy)
-    except ValueError as exc:
-        parser.error(str(exc))
-
-    try:
-        scanner = NetworkScanner(
-            args.target,
-            args.threads,
-            args.timeout,
-            args.aggressive,
-            ports,
-            args.output_dir,
-            args.profile,
-            args.max_hosts,
-            args.compare,
-            args.intrusive_checks,
-            args.host_workers,
-            args.service_workers,
-            proxy_url,
-            args.external_enrichment,
-            skip_discovery=args.skip_discovery,
-            no_external_enrichment=args.no_external_enrichment,
-            external_timeout=args.external_timeout,
-            exploit_mode=args.exploit,
-            exploit_timeout=args.exploit_timeout,
-            exploit_targets=args.exploit_targets,
-            exploit_auto_confirm=args.exploit_auto_confirm,
-            exploit_module=args.exploit_module,
-        )
-    except ValueError as exc:
-        parser.error(str(exc))
-
-    try:
-        scanner.scan_network()
-        if scanner.results.get("scan_status") in {"partial", "no_hosts"}:
+        runner = Orchestrator(args.execution_mode, options, scanner_factory=NetworkScanner)
+        result = runner.run(args.target)
+        if result['status'] in {'partial', 'no_hosts'}:
             sys.exit(2)
+        if result['status'] == 'interrupted':
+            sys.exit(130)
     except KeyboardInterrupt:
         print("\n[!] Scan interrupted by the user")
         sys.exit(130)
-    except (OSError, RuntimeError, ValueError) as exc:
+    except ValueError as exc:
+        parser.error(str(exc))
+    except (OSError, RuntimeError) as exc:
         print(f"[!] Error: {exc}")
         sys.exit(1)
 

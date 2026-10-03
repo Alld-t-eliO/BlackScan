@@ -22,9 +22,9 @@ def sanitized(value):
     if isinstance(value, dict):
         output = {}
         for key, item in value.items():
-            if str(key).lower() in {'set-cookie', 'authorization', 'proxy-authorization', 'cookie'}:
+            if str(key).lower() in {'set-cookie', 'authorization', 'proxy-authorization', 'cookie', 'credentials', 'password', 'secret', 'token'}:
                 output[key] = '[redacted]'
-            elif key == 'proxy' and isinstance(item, str):
+            elif key in {'proxy', 'socks_proxy', 'socks_proxy_url'} and isinstance(item, str):
                 output[key] = mask_proxy_url(item)
             else:
                 output[key] = sanitized(item)
@@ -87,6 +87,8 @@ class ReportMixin:
                 'intrusive_checks': self.intrusive_checks,
                 'external_enrichment_enabled': getattr(self, 'external_enrichment', False),
                 'proxy': mask_proxy_url(self.proxy_url),
+                'socks_proxy': mask_proxy_url(self.socks_proxy_url),
+                'execution_mode': getattr(self, 'execution_mode', 'local'),
                 'ports': self.ports,
                 'status': self.results.get('scan_status', 'complete'),
                 'skip_discovery': self.skip_discovery,
